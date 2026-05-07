@@ -39,12 +39,26 @@ python3 .claude/hooks/router.py --test    # 16/16 should pass
 (Optional) export `ANTHROPIC_API_KEY` so `SessionStart` auto-refreshes
 the model registry every 24 hours.
 
-## Slash commands
+## Pick a preset (one click per conversation)
 
-- `/smart-router-set <fast|balanced|precise|max|90..99.99>` — set the
-  accuracy target and routing thresholds.
+Three slash commands. Pick one at the start of a conversation based
+on how much accuracy you'll trade for token savings.
+
+| Command            | Accuracy | Token savings | Use for                             |
+|--------------------|----------|---------------|-------------------------------------|
+| `/router-eco`      | 95%      | ~90% saved    | exploration, prototypes, sketches   |
+| `/router-balanced` | 99%      | ~50% saved    | day-to-day work (default)           |
+| `/router-quality`  | 99.9%    | ~20% saved    | production code, security, finals   |
+
+Each preset prints a confirmation card and resets per-session stats
+so `/smart-router-report` gives you a clean picture.
+
+### Other commands
+
+- `/smart-router-set <fast|balanced|precise|max|<num>>` — fine-grained
+  mode for power users.
 - `/smart-router-status` — current mode + active thresholds + session
-  stats + a smart recommendation.
+  stats + smart recommendation.
 - `/smart-router-report` — full session breakdown with progress bars,
   escalation reasons, token totals, cost vs baseline.
 

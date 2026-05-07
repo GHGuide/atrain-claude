@@ -161,8 +161,28 @@ The PreToolUse hook **enforces rule 1** — a sensitive Task dispatch
 to any non-opus subagent triggers `permissionDecision: "ask"` with a
 recommendation to switch to `secure-opus`. Other rules are advisory.
 
-## Slash commands
+## Slash commands — three one-click presets
 
-- `/smart-router-set <fast|balanced|precise|max|90..99.99>` — set mode
+The user picks **one** preset per conversation. Each is a single
+slash command. Tradeoff is explicit: token savings vs accuracy.
+
+| Slash command       | Accuracy | Token savings | Use for                            |
+|---------------------|----------|---------------|------------------------------------|
+| `/router-eco`       | 95%      | ~90% saved    | exploration, prototypes, sketches  |
+| `/router-balanced`  | 99%      | ~50% saved    | day-to-day work (default)          |
+| `/router-quality`   | 99.9%    | ~20% saved    | production, security, finals       |
+
+If the user has not picked a preset and the current `mode` in
+`router-config.json` is the default `balanced`, leave it alone. If
+the user expresses cost sensitivity ("just exploring", "cheap as
+possible", "don't care if it's a bit off") suggest `/router-eco`.
+If they signal high stakes ("production deploy", "this is shipping",
+"can't be wrong") suggest `/router-quality`.
+
+### Other commands
+
+- `/smart-router-set <fast|balanced|precise|max|<num>>` — fine-grained
+  mode setting (kept for power users; the three presets above cover
+  most cases).
 - `/smart-router-status` — current mode + active thresholds + session
 - `/smart-router-report` — full session breakdown with progress bars
