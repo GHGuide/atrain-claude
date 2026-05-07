@@ -27,17 +27,50 @@ Two layers working together:
    effort)` tier, blocks sensitive Task dispatches headed to a
    non-Opus subagent, and tracks cost / savings / escalations.
 
-## Install
+## Install — global (recommended)
 
-Copy the `.claude/` and `.claude-plugin/` directories into your
-project root. Then in a fresh Claude Code session:
+Slash commands appear in Claude Code's command picker in **every**
+project. One install script does everything:
+
+```bash
+git clone https://github.com/Metrcih/smart-router.git
+cd smart-router
+./install.sh        # copies into ~/.claude/, merges hooks into settings.json
+```
+
+What the script does:
+
+- Copies `commands/`, `agents/`, `skills/smart-router/`, `hooks/router.py`
+  into `~/.claude/`
+- Merges four hook entries (`SessionStart`, `UserPromptSubmit`,
+  `PreToolUse`, `PostToolUse`) into `~/.claude/settings.json` —
+  it does **not** clobber existing hooks
+- Drops a default `~/.claude/router-config.json` (kept on re-install
+  unless you set `FORCE=1`)
+
+Restart Claude Code. In any project, the picker now shows
+`/router-eco`, `/router-balanced`, `/router-quality`, plus the
+five tiered subagents.
+
+Uninstall: `./uninstall.sh` (cleans files + detaches hook entries
+without touching the rest of your settings).
+
+## Install — single project (alternative)
+
+If you only want the plugin in one project:
+
+```bash
+cp -r /path/to/smart-router/.claude /path/to/your-project/
+cp -r /path/to/smart-router/.claude-plugin /path/to/your-project/
+```
+
+Restart Claude Code in that project.
+
+## Verify
 
 ```bash
 python3 .claude/hooks/router.py --test    # 16/16 should pass
 ```
-
-(Optional) export `ANTHROPIC_API_KEY` so `SessionStart` auto-refreshes
-the model registry every 24 hours.
 
 ## Pick a preset (one click per conversation)
 
