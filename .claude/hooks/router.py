@@ -113,6 +113,7 @@ def _default_config() -> dict:
             ".env", "dotenv", "certificate", "ssl", "tls",
         ],
         "agent_registry": dict(AGENT_REGISTRY),
+        "decompose_enabled": False,
         "routing_tables": {
             "eco": {
                 "recon": "recon-haiku",

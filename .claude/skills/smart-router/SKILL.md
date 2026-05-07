@@ -122,31 +122,93 @@ appended to `calibration_history`.
 | Sonnet 4.6| low / medium / high / max           |
 | Haiku 4.5 | none — never include `effort` field |
 
-## Decompose-by-default — split every non-trivial prompt
+## Decompose mode
 
-This is **how the router works**, not an opt-in mode. For any user
-prompt with 2 or more distinct concerns, decompose it into chunks
-and dispatch them through the five tiered subagents in parallel.
+Decomposition is **off by default**. Two ways to turn it on:
 
-The active preset (`eco`, `balanced`, `quality`) does **not** change
-whether you decompose — it changes **which subagent each chunk gets
-assigned to**. The mapping is stored in
-`.claude/router-config.json` under `routing_tables[<mode>]`. Read
-that file at the start of every session and apply the active table.
+- **`/router-on`** — enable for the whole conversation. Every
+  multi-faceted prompt gets reasoned about and split into parallel
+  subagent chunks until the user types `/router-off`.
+- **`/router-once <task>`** — decompose this single prompt only.
+  Subsequent prompts go back to whatever the previous mode was.
 
-### Routing tables (chunk type → subagent)
+Read `decompose_enabled` from `router-config.json` at the start of
+every assistant turn. If `false`, work normally — single Claude
+session, no fan-out. Don't pretend it's on; don't suggest it.
 
-| Chunk type     | eco             | balanced         | quality          |
-|----------------|-----------------|------------------|------------------|
-| recon          | `recon-haiku`   | `recon-haiku`    | `impl-sonnet`    |
-| impl           | `impl-sonnet`   | `impl-sonnet`    | `impl-sonnet`    |
-| api            | `impl-sonnet`   | `api-sonnet`     | `architect-opus` |
-| architecture   | `architect-opus`| `architect-opus` | `architect-opus` |
-| sensitive      | `secure-opus`   | `secure-opus`    | `secure-opus`    |
+### When `decompose_enabled` is true
 
-`secure-opus` is the same across every preset — security work never
-gets cost-optimized. Everything else slides up the model ladder as
-the preset gets stricter.
+For every non-trivial user prompt, **think through what the prompt
+actually requires before any tool calls**. Don't apply a fixed
+5-category template. Read the prompt and reason about its shape
+in plain language. Example:
+
+> The user wants me to add a webhook handler that verifies
+> signatures and writes events to a queue. So: (a) find where
+> existing webhooks live, (b) design the signature-verification
+> approach — that's the security-critical piece, (c) wire the
+> handler — that's bounded code-writing, (d) add the queue
+> publish — small.
+
+Then for each piece, decide its complexity tier independently:
+
+1. **Read-only** (find / list / grep / explore the codebase) →
+   small subagent.
+2. **Bounded code-writing** (write a function, fix a bug, add one
+   small file with clear shape) → mid subagent.
+3. **Design / cross-file / subtle** (refactor, multi-file changes,
+   bugs without a clear stack trace, performance optimization) →
+   top subagent.
+4. **Security-touching** (auth, secrets, crypto, hashing,
+   migrations, anything that handles credentials) →
+   `secure-opus`, xhigh effort, **no exceptions, regardless of
+   preset.**
+
+Apply the active **cost preset** as a *bias*, not a rule:
+
+| Preset       | When in doubt about a tier...                 |
+|--------------|-----------------------------------------------|
+| `eco`        | downshift one tier (and double-check security)|
+| `balanced`   | pick the obvious tier                          |
+| `quality`    | upshift one tier (recon → Sonnet, etc.)       |
+
+So a "find existing webhook code" chunk is small subagent in eco
+and balanced (recon-haiku) but mid subagent in quality
+(impl-sonnet — Haiku skipped because the user signalled they care
+more about correctness than cost).
+
+### Procedure
+
+1. Reason in 1-3 sentences about what the prompt actually wants.
+2. List 2-7 concrete chunks. Each chunk has a one-line
+   prompt-specific task and an assigned subagent.
+3. Print the plan to the user.
+4. Dispatch all chunks at the same dependency level in parallel
+   (multiple `Task` tool calls in the same assistant message).
+5. After results return, compile them into one answer. Cite which
+   chunk produced which finding.
+
+### When NOT to decompose (even with `decompose_enabled=true`)
+
+- Prompt has one obvious shape (a single edit, a single search).
+  Decomposition adds dispatch overhead; only do it for genuinely
+  multi-faceted work.
+- User explicitly says "do this yourself" or "no agents".
+- Latency-sensitive: each subagent costs ~5-15 s of overhead.
+
+### Cost preset routing bias (when in doubt)
+
+The bias hints stored in `routing_tables[<mode>]` are starting
+points, not rules. Claude reasons per-chunk and may deviate when
+the chunk's specifics warrant it.
+
+| Chunk shape    | eco bias        | balanced bias    | quality bias       |
+|----------------|-----------------|------------------|--------------------|
+| recon          | `recon-haiku`   | `recon-haiku`    | `impl-sonnet`      |
+| impl bounded   | `impl-sonnet`   | `impl-sonnet`    | `impl-sonnet`      |
+| api/integration| `impl-sonnet`   | `api-sonnet`     | `architect-opus`   |
+| architecture   | `architect-opus`| `architect-opus` | `architect-opus`   |
+| security       | `secure-opus`   | `secure-opus`    | `secure-opus`      |
 
 ### Procedure
 
