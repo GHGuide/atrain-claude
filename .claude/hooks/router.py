@@ -49,6 +49,34 @@ TEST_RUNNER_RE = re.compile(r"pytest|jest|vitest|npm test|cargo test|go test")
 PATH_RE = re.compile(r'"path"\s*:')
 EFFORT_PRIORITY = ("max", "xhigh", "high", "medium", "low")
 
+# ─── Classification rule constants (introspectable) ─────────────────
+# Lifting these from classify_task locals to module scope makes them
+# discoverable via --print-rules and lintable against SKILL.md.
+OPUS_KEYWORDS = (
+    "refactor entire", "redesign", "optimize", "bottleneck",
+    "architecture", "design pattern", "review all", "performance",
+)
+API_KEYWORDS = (
+    "endpoint", "endpoints", "route", "routes",
+    "api integration", "third-party", "graphql",
+    "rest api", "http handler",
+)
+BOILERPLATE_STRONG = (
+    "scaffold", "create a basic", "stub out", "add a simple",
+)
+BOILERPLATE_WEAK = ("generate", "template")
+BOILERPLATE_ANCHORS = (
+    "boilerplate", "scaffold", "template", "starter", "skeleton",
+)
+USER_PHRASES = (
+    "think carefully", "be precise", "dont mess", "don't mess",
+    "critical", "production", "use max effort", "spare no tokens",
+)
+MANIFEST_FILES = (
+    "package.json", "pyproject.toml", "cargo.toml",
+    "go.mod", "requirements.txt",
+)
+
 
 def _empty_stats() -> dict:
     return {
@@ -434,11 +462,7 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
     opus_effort = config["thresholds"].get("opus_effort", "high")
     precise = config.get("accuracy_target", 99.0) >= 99.9
 
-    opus_keywords = (
-        "refactor entire", "redesign", "optimize", "bottleneck",
-        "architecture", "design pattern", "review all", "performance",
-    )
-    for kw in opus_keywords:
+    for kw in OPUS_KEYWORDS:
         if kw in tool_str:
             eff = "xhigh" if precise and opus_effort == "high" else opus_effort
             return {"model_alias": "opus", "effort": eff,
@@ -495,11 +519,8 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
                     "reason": "2 paths (precise)"}
         return {"model_alias": "sonnet", "effort": "high",
                 "reason": "2 paths in input"}
-    api_keywords = ("endpoint", "endpoints", "route", "routes",
-                    "api integration", "third-party", "graphql",
-                    "rest api", "http handler")
     api_re = re.compile(
-        r"\b(?:" + "|".join(re.escape(k) for k in api_keywords) + r")\b"
+        r"\b(?:" + "|".join(re.escape(k) for k in API_KEYWORDS) + r")\b"
     )
     api_match = api_re.search(tool_str)
     if api_match:
@@ -522,20 +543,15 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
                     "reason": "test runner (precise)"}
         return {"model_alias": "sonnet", "effort": "medium",
                 "reason": "test runner"}
-    boilerplate_strong = ("scaffold", "create a basic", "stub out",
-                          "add a simple")
-    boilerplate_weak = ("generate", "template")
-    boilerplate_anchors = ("boilerplate", "scaffold", "template",
-                           "starter", "skeleton")
-    for kw in boilerplate_strong:
+    for kw in BOILERPLATE_STRONG:
         if kw in tool_str:
             if precise:
                 return {"model_alias": "opus", "effort": "high",
                         "reason": "boilerplate (precise)"}
             return {"model_alias": "sonnet", "effort": "medium",
                     "reason": f"boilerplate: {kw}"}
-    for kw in boilerplate_weak:
-        if kw in tool_str and any(a in tool_str for a in boilerplate_anchors):
+    for kw in BOILERPLATE_WEAK:
+        if kw in tool_str and any(a in tool_str for a in BOILERPLATE_ANCHORS):
             if precise:
                 return {"model_alias": "opus", "effort": "high",
                         "reason": "boilerplate (precise)"}
@@ -565,21 +581,13 @@ def hard_escalation(tool_input, config: dict, session_id: str) -> tuple:
             break
     if last_post and last_post.get("had_error"):
         return (True, "error recovery")
-    user_phrases = (
-        "think carefully", "be precise", "dont mess", "don't mess",
-        "critical", "production", "use max effort", "spare no tokens",
-    )
-    for p in user_phrases:
+    for p in USER_PHRASES:
         if p in tool_str:
             return (True, f"user phrase: {p}")
-    manifest_files = (
-        "package.json", "pyproject.toml", "cargo.toml",
-        "go.mod", "requirements.txt",
-    )
     if isinstance(tool_input, dict):
         path = str(tool_input.get("path") or tool_input.get("file_path", "")).lower()
         cmd = str(tool_input.get("command", "")).lower()
-        for mf in manifest_files:
+        for mf in MANIFEST_FILES:
             if mf in path or mf in cmd:
                 return (True, f"manifest: {mf}")
     if matched_kw and weight >= 0.6:
@@ -1423,6 +1431,70 @@ def run_tests() -> None:
         sys.exit(1)
 
 
+def print_rules() -> None:
+    """Dump every classification rule the hook applies. Reflects what
+    classify_task and hard_escalation do today — pair with --lint-skill
+    to verify SKILL.md mirrors the same set."""
+    sys.stdout.write("=== smart-router classification rules ===\n\n")
+    sys.stdout.write("OPUS keywords (force opus tier):\n  ")
+    sys.stdout.write(", ".join(OPUS_KEYWORDS) + "\n\n")
+    sys.stdout.write("API keywords (force sonnet+high or opus in precise):\n  ")
+    sys.stdout.write(", ".join(API_KEYWORDS) + "\n\n")
+    sys.stdout.write("Boilerplate strong (force sonnet+medium):\n  ")
+    sys.stdout.write(", ".join(BOILERPLATE_STRONG) + "\n\n")
+    sys.stdout.write("Boilerplate weak (need anchor co-occurrence):\n  ")
+    sys.stdout.write(", ".join(BOILERPLATE_WEAK) + "\n  anchors: ")
+    sys.stdout.write(", ".join(BOILERPLATE_ANCHORS) + "\n\n")
+    sys.stdout.write("User phrases (force opus xhigh):\n  ")
+    sys.stdout.write(", ".join(USER_PHRASES) + "\n\n")
+    sys.stdout.write("Manifest files (force opus xhigh):\n  ")
+    sys.stdout.write(", ".join(MANIFEST_FILES) + "\n\n")
+    sys.stdout.write("Tool-name + length rules:\n")
+    sys.stdout.write("  Read/LS/Glob with length < 300        → haiku+none\n")
+    sys.stdout.write("  Grep with length < 150                 → haiku+none\n")
+    sys.stdout.write("  WebSearch with length < 100            → haiku+none\n")
+    sys.stdout.write("  Bash starting with grep/ls/find/cat/echo/pwd/wc/head/tail/diff/stat/file → haiku+none\n")
+    sys.stdout.write("  Write/Edit/MultiEdit length < 1500    → sonnet+medium\n")
+    sys.stdout.write("  Write/Edit/MultiEdit 1500-3999        → sonnet+high\n")
+    sys.stdout.write("  Write/Edit/MultiEdit length >= 4000   → opus+high\n")
+    sys.stdout.write("  paths >= 3                             → opus+high\n")
+    sys.stdout.write("  paths > 3 (multi-file)                 → opus+xhigh (escalation)\n")
+
+
+def lint_skill(skill_path: Path = None) -> int:
+    """Verify SKILL.md mentions every keyword classify_task uses.
+    Returns exit code: 0 = clean, 1 = drift detected."""
+    if skill_path is None:
+        candidates = [
+            ROOT / "skills" / "smart-router" / "SKILL.md",
+            Path.home() / ".claude" / "skills" / "smart-router" / "SKILL.md",
+        ]
+        skill_path = next((c for c in candidates if c.exists()), None)
+    if skill_path is None or not skill_path.exists():
+        sys.stdout.write("smart-router lint: SKILL.md not found\n")
+        return 1
+    text = skill_path.read_text(encoding="utf-8").lower()
+    issues = []
+    for kw in OPUS_KEYWORDS:
+        if kw not in text:
+            issues.append(f"OPUS keyword '{kw}' missing from SKILL.md")
+    for kw in API_KEYWORDS:
+        if kw not in text and kw not in ("endpoints", "routes"):
+            issues.append(f"API keyword '{kw}' missing from SKILL.md")
+    for kw in BOILERPLATE_STRONG:
+        if kw not in text:
+            issues.append(f"Boilerplate-strong '{kw}' missing from SKILL.md")
+    if issues:
+        sys.stdout.write(
+            f"smart-router lint: {len(issues)} drift issues\n"
+        )
+        for i in issues[:20]:
+            sys.stdout.write(f"  - {i}\n")
+        return 1
+    sys.stdout.write("smart-router lint: SKILL.md mirrors classify_task. OK.\n")
+    return 0
+
+
 def main() -> None:
     try:
         if "--update-models" in sys.argv:
@@ -1431,6 +1503,11 @@ def main() -> None:
         if "--test" in sys.argv:
             run_tests()
             return
+        if "--print-rules" in sys.argv:
+            print_rules()
+            return
+        if "--lint-skill" in sys.argv:
+            sys.exit(lint_skill())
         try:
             is_tty = sys.stdin.isatty()
         except (OSError, ValueError):

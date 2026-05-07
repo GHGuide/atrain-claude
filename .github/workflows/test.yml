@@ -21,6 +21,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run hook self-tests
         run: python3 .claude/hooks/router.py --test
+      - name: Lint SKILL.md against classify_task constants
+        run: python3 .claude/hooks/router.py --lint-skill
       - name: Smoke-test PreToolUse via stdin
         run: |
           echo '{"hook_event":"PreToolUse","tool_name":"Read","tool_input":{"path":"src/index.ts"},"session_id":"ci"}' \

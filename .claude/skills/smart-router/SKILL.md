@@ -56,6 +56,8 @@ The script picks the highest-version match for each prefix
 - Changes across `2–3` files simultaneously (`2` paths)
 - Debugging with a clear error + stack trace
 - API routes, new endpoints, adding integrations
+- API surface keywords: `endpoint`, `route`, `api integration`,
+  `third-party`, `graphql`, `rest api`, `http handler`
 
 ### OPUS + high effort
 - Write/Edit `> 400` lines (input length `>= 4000`)
