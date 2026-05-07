@@ -14,13 +14,13 @@ Print the full smart-router session report.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Mode: {MODE} (target: {ACCURACY}%)   Updated: {DATE}
   ─────────────────────────────────────────────
-  Tool calls by model + effort:
-    haiku  none   ██████░░░░░░  {N} ({PCT}%)
-    sonnet medium ████░░░░░░░░  {N} ({PCT}%)
-    sonnet high   ██░░░░░░░░░░  {N} ({PCT}%)
-    opus   high   ███░░░░░░░░░  {N} ({PCT}%)
-    opus   xhigh  █░░░░░░░░░░░  {N} ({PCT}%)
-    opus   max    ░░░░░░░░░░░░  {N} ({PCT}%)
+  Tool calls by model + effort:                           $/1k tok
+    haiku  none   ██████░░░░░░  {N} ({PCT}%)              $0.004
+    sonnet medium ████░░░░░░░░  {N} ({PCT}%)              $0.015
+    sonnet high   ██░░░░░░░░░░  {N} ({PCT}%)              $0.015
+    opus   high   ███░░░░░░░░░  {N} ({PCT}%)              $0.025
+    opus   xhigh  █░░░░░░░░░░░  {N} ({PCT}%)              $0.025
+    opus   max    ░░░░░░░░░░░░  {N} ({PCT}%)              $0.025
 
   Escalations: {N} ({PCT}% of calls)
     └─ auth/secrets:    {N}

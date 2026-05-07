@@ -194,9 +194,132 @@ def _tool_str(tool_input) -> str:
         return str(tool_input).lower()
 
 
+_ERROR_LINE_RE = re.compile(
+    r"(?m)^(?:.{0,200})(Traceback \(most recent call last\)"
+    r"|^[A-Z][a-zA-Z]*Error:"
+    r"|undefined is not"
+    r"|cannot read properties"
+    r"|ENOENT"
+    r"|ModuleNotFoundError"
+    r"|ImportError)"
+)
+
+
+def _detect_error(out_str: str) -> bool:
+    """Detect real errors. Skip false positives from logged/quoted strings."""
+    if not out_str:
+        return False
+    sample = out_str[-4000:]
+    if "PASS\n" in sample and "test results" in sample.lower():
+        return False
+    if "Traceback (most recent call last):" in sample and "  File " in sample:
+        return True
+    for sig in ("SyntaxError:", "TypeError:", "NameError:",
+                "ModuleNotFoundError", "ImportError:"):
+        if re.search(r"^" + re.escape(sig), sample, re.MULTILINE):
+            return True
+    if "ENOENT" in sample and ("Error" in sample or "error" in sample):
+        return True
+    if "undefined is not" in sample:
+        return True
+    if "cannot read properties" in sample:
+        return True
+    return False
+
+
+def _content_length(tool_input) -> int:
+    """Raw content length, skipping JSON overhead. Falls back to full str."""
+    if isinstance(tool_input, dict):
+        for key in ("content", "new_string", "command"):
+            v = tool_input.get(key)
+            if isinstance(v, str):
+                return len(v)
+        if "edits" in tool_input and isinstance(tool_input["edits"], list):
+            return sum(
+                len(e.get("new_string", "")) for e in tool_input["edits"]
+                if isinstance(e, dict)
+            )
+    return len(_tool_str(tool_input))
+
+
+def _build_sensitive_re(keywords):
+    """Compile token-boundary regex over sensitive keywords."""
+    if not keywords:
+        return None
+    parts = [re.escape(k) for k in keywords]
+    return re.compile(
+        r"(?<![A-Za-z0-9_])(?:" + "|".join(parts) +
+        r")(?![A-Za-z0-9_])",
+        re.IGNORECASE,
+    )
+
+
+def _scan_for_kw(text, pattern):
+    if not pattern or not text:
+        return ""
+    m = pattern.search(text)
+    return m.group(0).lower() if m else ""
+
+
+def _location_weighted_sensitive(tool_input, keywords) -> tuple:
+    """Return (matched_kw, weight) where weight 1.0 = strong signal,
+    0.6 = soft signal (kw buried in free-text content)."""
+    pattern = _build_sensitive_re(keywords)
+    if not pattern:
+        return ("", 0.0)
+    if not isinstance(tool_input, dict):
+        text = _tool_str(tool_input)
+        kw = _scan_for_kw(text, pattern)
+        return (kw, 0.6) if kw else ("", 0.0)
+    strong_fields = ("path", "file_path", "command", "old_string",
+                     "new_string", "pattern", "subagent_type")
+    for field in strong_fields:
+        v = tool_input.get(field, "")
+        if isinstance(v, str):
+            kw = _scan_for_kw(v, pattern)
+            if kw:
+                return (kw, 1.0)
+    content = tool_input.get("content", "")
+    if isinstance(content, str):
+        hits = []
+        for m in pattern.finditer(content):
+            hits.append(m.group(0).lower())
+            if len(hits) >= 3:
+                break
+        if len(hits) >= 2:
+            return (hits[0], 0.9)
+        if hits:
+            high_risk = {"private_key", "api_key", "secret", "password",
+                         "access_token", "refresh_token", ".env", "dotenv"}
+            if hits[0] in high_risk:
+                return (hits[0], 0.95)
+            return (hits[0], 0.6)
+    return ("", 0.0)
+
+
+def compute_confidence(tool_name, tool_input, decision_alias) -> float:
+    """0..1 — how sure the classifier is. Low confidence = escalate."""
+    length = _content_length(tool_input)
+    if decision_alias == "haiku":
+        if length < 100:
+            return 0.98
+        if length < 200:
+            return 0.92
+        return 0.85
+    if decision_alias == "sonnet":
+        if 1400 <= length <= 1600 or 3800 <= length <= 4200:
+            return 0.65
+        return 0.88
+    if decision_alias == "opus":
+        if length >= 6000:
+            return 0.97
+        return 0.90
+    return 0.80
+
+
 def classify_task(tool_name: str, tool_input, config: dict) -> dict:
     tool_str = _tool_str(tool_input)
-    length = len(tool_str)
+    length = _content_length(tool_input)
     sonnet_effort = config["thresholds"].get("sonnet_effort", "high")
     opus_effort = config["thresholds"].get("opus_effort", "high")
     precise = config.get("accuracy_target", 99.0) >= 99.9
@@ -262,15 +385,20 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
                     "reason": "2 paths (precise)"}
         return {"model_alias": "sonnet", "effort": "high",
                 "reason": "2 paths in input"}
-    api_keywords = ("endpoint", "route", "api", "integration")
-    for kw in api_keywords:
-        if kw in tool_str:
-            if precise:
-                eff = "xhigh" if opus_effort == "high" else opus_effort
-                return {"model_alias": "opus", "effort": eff,
-                        "reason": f"{kw} (precise)"}
-            return {"model_alias": "sonnet", "effort": "high",
-                    "reason": f"api-keyword: {kw}"}
+    api_keywords = ("endpoint", "endpoints", "route", "routes",
+                    "api integration", "third-party", "graphql",
+                    "rest api", "http handler")
+    api_re = re.compile(
+        r"\b(?:" + "|".join(re.escape(k) for k in api_keywords) + r")\b"
+    )
+    api_match = api_re.search(tool_str)
+    if api_match:
+        if precise:
+            eff = "xhigh" if opus_effort == "high" else opus_effort
+            return {"model_alias": "opus", "effort": eff,
+                    "reason": f"{api_match.group(0)} (precise)"}
+        return {"model_alias": "sonnet", "effort": "high",
+                "reason": f"api-keyword: {api_match.group(0)}"}
 
     if tool_name in ("Write", "Edit", "MultiEdit") and length < 1500:
         if precise:
@@ -284,15 +412,25 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
                     "reason": "test runner (precise)"}
         return {"model_alias": "sonnet", "effort": "medium",
                 "reason": "test runner"}
-    boilerplate_kw = ("scaffold", "create a basic", "stub out",
-                      "add a simple", "template", "generate")
-    for kw in boilerplate_kw:
+    boilerplate_strong = ("scaffold", "create a basic", "stub out",
+                          "add a simple")
+    boilerplate_weak = ("generate", "template")
+    boilerplate_anchors = ("boilerplate", "scaffold", "template",
+                           "starter", "skeleton")
+    for kw in boilerplate_strong:
         if kw in tool_str:
             if precise:
                 return {"model_alias": "opus", "effort": "high",
                         "reason": "boilerplate (precise)"}
             return {"model_alias": "sonnet", "effort": "medium",
                     "reason": f"boilerplate: {kw}"}
+    for kw in boilerplate_weak:
+        if kw in tool_str and any(a in tool_str for a in boilerplate_anchors):
+            if precise:
+                return {"model_alias": "opus", "effort": "high",
+                        "reason": "boilerplate (precise)"}
+            return {"model_alias": "sonnet", "effort": "medium",
+                    "reason": f"boilerplate: {kw}+anchor"}
 
     if precise:
         return {"model_alias": "opus", "effort": "high",
@@ -305,9 +443,10 @@ def hard_escalation(tool_input, config: dict, session_id: str) -> tuple:
     n_paths = len(PATH_RE.findall(tool_str))
     if n_paths > 3:
         return (True, f"multi-file: >3 paths ({n_paths})")
-    for kw in config.get("hard_escalation_keywords", []):
-        if kw in tool_str:
-            return (True, f"sensitive: {kw}")
+    keywords = config.get("hard_escalation_keywords", [])
+    matched_kw, weight = _location_weighted_sensitive(tool_input, keywords)
+    if matched_kw and weight >= 0.85:
+        return (True, f"sensitive: {matched_kw}")
     log = load_session_log(session_id)
     last_post = None
     for entry in reversed(log):
@@ -327,9 +466,14 @@ def hard_escalation(tool_input, config: dict, session_id: str) -> tuple:
         "package.json", "pyproject.toml", "cargo.toml",
         "go.mod", "requirements.txt",
     )
-    for mf in manifest_files:
-        if mf in tool_str:
-            return (True, f"manifest: {mf}")
+    if isinstance(tool_input, dict):
+        path = str(tool_input.get("path") or tool_input.get("file_path", "")).lower()
+        cmd = str(tool_input.get("command", "")).lower()
+        for mf in manifest_files:
+            if mf in path or mf in cmd:
+                return (True, f"manifest: {mf}")
+    if matched_kw and weight >= 0.6:
+        return (True, f"sensitive (soft): {matched_kw}")
     return (False, "")
 
 
@@ -526,21 +670,45 @@ def handle_pre_tool_use(data: dict) -> None:
     full_id = model_def.get("id", model_alias)
 
     if model_alias == "haiku":
-        output = {
-            "model_override": full_id,
-            "reason": reason,
-            "tier_label": f"{model_alias}+none",
-        }
         log_effort = "none"
+        tier_label = f"{model_alias}+none"
+        effort_text = ""
     else:
         effort = downgrade_effort(model_def, effort)
-        output = {
-            "model_override": full_id,
-            "effort": effort,
-            "reason": reason,
-            "tier_label": f"{model_alias}+{effort}",
-        }
         log_effort = effort
+        tier_label = f"{model_alias}+{effort}"
+        effort_text = f"+{effort}"
+
+    confidence = compute_confidence(tool_name, tool_input, model_alias)
+
+    if confidence < 0.70 and model_alias == "haiku":
+        model_alias = "sonnet"
+        effort = downgrade_effort(
+            config["model_registry"]["sonnet"], "medium"
+        )
+        log_effort = effort
+        tier_label = f"sonnet+{effort}"
+        effort_text = f"+{effort}"
+        full_id = config["model_registry"]["sonnet"]["id"]
+        reason = f"{reason} (conf {confidence:.2f} → bump)"
+
+    advice = (
+        f"smart-router: {model_alias}{effort_text} "
+        f"({full_id}) — {reason} | conf={confidence:.2f}"
+    )
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": advice,
+        },
+        "model_override": full_id,
+        "reason": reason,
+        "tier_label": tier_label,
+        "confidence": round(confidence, 3),
+    }
+    if model_alias != "haiku":
+        output["effort"] = effort
 
     log = load_session_log(session_id)
     log.append({
@@ -617,7 +785,7 @@ def handle_post_tool_use(data: dict) -> None:
         stats["baseline_opus_xhigh_cost_usd"] - stats["estimated_cost_usd"]
     )
 
-    had_error = any(sig in out_str for sig in ERROR_SIGNATURES)
+    had_error = _detect_error(out_str)
 
     precise = config.get("accuracy_target", 99.0) >= 99.9
     verify_resp = None
@@ -905,7 +1073,7 @@ def run_tests() -> None:
             capture(handle_post_tool_use, {
                 "hook_event": "PostToolUse",
                 "tool_name": "Bash",
-                "tool_output": "Traceback (most recent call last)",
+                "tool_output": "Traceback (most recent call last):\n  File \"a.py\", line 1\nNameError: x",
                 "model_used": "claude-haiku-4-5-20251001",
                 "effort_used": "none",
                 "session_id": sid,
