@@ -24,11 +24,18 @@ Apply the **Quality** preset to smart-router and confirm. Steps:
 ├─────────────────────────────┬───────────────────────────┤
 │  Accuracy target            │  99.9%                    │
 │  Token savings (estimated)  │  ~20% vs all-Opus         │
-│  Haiku rate                 │  ~15% of tool calls       │
+│  Decompose mode             │  ON (every multi-step prompt) │
 │  Sonnet effort              │  high                     │
 │  Opus effort                │  xhigh                    │
 │  Consistency runs           │  2                        │
-└─────────────────────────────┴───────────────────────────┘
+├─────────────────────────────┴───────────────────────────┤
+│  Routing table (chunk type → subagent)                  │
+│    recon         → impl-sonnet (NOT haiku)              │
+│    impl          → impl-sonnet (high effort)            │
+│    api           → architect-opus                       │
+│    architecture  → architect-opus (xhigh)               │
+│    sensitive     → secure-opus (xhigh)                  │
+└─────────────────────────────────────────────────────────┘
   Best for: production code, security-sensitive changes,
   cryptography, migrations, anything where a wrong answer
   is costly to discover later.

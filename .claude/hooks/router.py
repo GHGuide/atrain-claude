@@ -113,6 +113,29 @@ def _default_config() -> dict:
             ".env", "dotenv", "certificate", "ssl", "tls",
         ],
         "agent_registry": dict(AGENT_REGISTRY),
+        "routing_tables": {
+            "eco": {
+                "recon": "recon-haiku",
+                "impl": "impl-sonnet",
+                "api": "impl-sonnet",
+                "architecture": "architect-opus",
+                "sensitive": "secure-opus",
+            },
+            "balanced": {
+                "recon": "recon-haiku",
+                "impl": "impl-sonnet",
+                "api": "api-sonnet",
+                "architecture": "architect-opus",
+                "sensitive": "secure-opus",
+            },
+            "quality": {
+                "recon": "impl-sonnet",
+                "impl": "impl-sonnet",
+                "api": "architect-opus",
+                "architecture": "architect-opus",
+                "sensitive": "secure-opus",
+            },
+        },
         "session_stats": _empty_stats(),
         "calibration_history": [],
     }

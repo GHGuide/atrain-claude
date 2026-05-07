@@ -24,15 +24,22 @@ Apply the **Eco** preset to smart-router and confirm. Steps:
 ├─────────────────────────────┬───────────────────────────┤
 │  Accuracy target            │  95.0%                    │
 │  Token savings (estimated)  │  ~90% vs all-Opus         │
-│  Haiku rate                 │  ~60% of tool calls       │
+│  Decompose mode             │  ON (every multi-step prompt) │
 │  Sonnet effort              │  medium                   │
 │  Opus effort                │  high                     │
 │  Consistency runs           │  0                        │
-└─────────────────────────────┴───────────────────────────┘
+├─────────────────────────────┴───────────────────────────┤
+│  Routing table (chunk type → subagent)                  │
+│    recon         → recon-haiku                          │
+│    impl          → impl-sonnet                          │
+│    api           → impl-sonnet (downgraded from api-sonnet) │
+│    architecture  → architect-opus                       │
+│    sensitive     → secure-opus (never compromised)      │
+└─────────────────────────────────────────────────────────┘
   Best for: exploration, prototypes, search-heavy work,
   side projects, sketches.
-  Avoid for: production, security, anything where a wrong
-  answer is expensive to discover later.
+  Avoid for: anything where a wrong answer is expensive
+  to discover later.
 
   Switch anytime with /router-balanced or /router-quality.
 ```

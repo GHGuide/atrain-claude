@@ -42,15 +42,27 @@ five smart-router subagents, then merge the results.
    user can audit. If any chunk failed, surface the error and
    stop — don't paper over it.
 
-## Agent selection
+## Agent selection — uses the active preset's routing table
 
-| Subtask shape                          | Agent             |
-|----------------------------------------|-------------------|
-| find / locate / list / search / where  | recon-haiku       |
-| write small file / edit / fix bug      | impl-sonnet       |
-| add endpoint / route / integration     | api-sonnet        |
-| refactor / design / multi-file changes | architect-opus    |
-| security/secret/crypto/migration       | secure-opus       |
+Read `~/.claude/router-config.json` (or project `.claude/router-config.json`)
+and look up `routing_tables[<mode>]`. The active mode determines which
+subagent each chunk type maps to. Eco aggressively pushes to Haiku/Sonnet;
+quality keeps everything on Sonnet/Opus.
+
+Default chunk-type taxonomy:
+
+| Chunk shape                            | Type            |
+|----------------------------------------|-----------------|
+| find / locate / list / search / where  | `recon`         |
+| write small file / edit / fix bug      | `impl`          |
+| add endpoint / route / integration     | `api`           |
+| refactor / design / multi-file changes | `architecture`  |
+| security/secret/crypto/migration       | `sensitive`     |
+
+Then look up `routing_tables[mode][type]` to get the agent name. Example
+for `eco`: an `api` chunk maps to `impl-sonnet` (downgraded from
+`api-sonnet`). For `quality`: a `recon` chunk maps to `impl-sonnet`
+(upgraded from `recon-haiku` because higher accuracy target).
 
 ## Constraints
 

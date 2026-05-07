@@ -122,11 +122,31 @@ appended to `calibration_history`.
 | Sonnet 4.6| low / medium / high / max           |
 | Haiku 4.5 | none — never include `effort` field |
 
-## Decompose mode — split prompts, parallel dispatch, merge
+## Decompose-by-default — split every non-trivial prompt
 
-When the user's request has 3+ distinct concerns, decompose it into
-chunks and run them in parallel rather than handling everything in
-main Claude (Opus). This is the headline feature.
+This is **how the router works**, not an opt-in mode. For any user
+prompt with 2 or more distinct concerns, decompose it into chunks
+and dispatch them through the five tiered subagents in parallel.
+
+The active preset (`eco`, `balanced`, `quality`) does **not** change
+whether you decompose — it changes **which subagent each chunk gets
+assigned to**. The mapping is stored in
+`.claude/router-config.json` under `routing_tables[<mode>]`. Read
+that file at the start of every session and apply the active table.
+
+### Routing tables (chunk type → subagent)
+
+| Chunk type     | eco             | balanced         | quality          |
+|----------------|-----------------|------------------|------------------|
+| recon          | `recon-haiku`   | `recon-haiku`    | `impl-sonnet`    |
+| impl           | `impl-sonnet`   | `impl-sonnet`    | `impl-sonnet`    |
+| api            | `impl-sonnet`   | `api-sonnet`     | `architect-opus` |
+| architecture   | `architect-opus`| `architect-opus` | `architect-opus` |
+| sensitive      | `secure-opus`   | `secure-opus`    | `secure-opus`    |
+
+`secure-opus` is the same across every preset — security work never
+gets cost-optimized. Everything else slides up the model ladder as
+the preset gets stricter.
 
 ### Procedure
 

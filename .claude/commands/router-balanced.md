@@ -24,15 +24,22 @@ Apply the **Balanced** preset to smart-router and confirm. Steps:
 ├─────────────────────────────┬───────────────────────────┤
 │  Accuracy target            │  99.0%                    │
 │  Token savings (estimated)  │  ~50% vs all-Opus         │
-│  Haiku rate                 │  ~35% of tool calls       │
+│  Decompose mode             │  ON (every multi-step prompt) │
 │  Sonnet effort              │  high                     │
 │  Opus effort                │  high                     │
 │  Consistency runs           │  1                        │
-└─────────────────────────────┴───────────────────────────┘
+├─────────────────────────────┴───────────────────────────┤
+│  Routing table (chunk type → subagent)                  │
+│    recon         → recon-haiku                          │
+│    impl          → impl-sonnet                          │
+│    api           → api-sonnet                           │
+│    architecture  → architect-opus                       │
+│    sensitive     → secure-opus                          │
+└─────────────────────────────────────────────────────────┘
   Best for: most day-to-day work — features, bug fixes,
   refactors, tests, code review.
-  Auto-escalates to Opus xhigh on auth/secrets/crypto/
-  migrations and on any error recovery.
+  Auto-escalates to Opus xhigh on auth/secret/crypto/
+  migration paths and on any error recovery.
 
   Switch anytime with /router-eco or /router-quality.
 ```
