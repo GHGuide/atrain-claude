@@ -122,6 +122,77 @@ appended to `calibration_history`.
 | Sonnet 4.6| low / medium / high / max           |
 | Haiku 4.5 | none — never include `effort` field |
 
+## Decompose mode — split prompts, parallel dispatch, merge
+
+When the user's request has 3+ distinct concerns, decompose it into
+chunks and run them in parallel rather than handling everything in
+main Claude (Opus). This is the headline feature.
+
+### Procedure
+
+1. **Plan.** Write a brief markdown list — 3 to 7 chunks max. Each
+   chunk gets a one-line task, an assigned subagent, and a list of
+   chunks it depends on.
+
+2. **Show.** Print the plan to the user before dispatching. Format:
+
+   ```
+   Plan:
+   1. [recon-haiku]    find existing auth middleware
+   2. [architect-opus] design rate-limit strategy
+   3. [secure-opus]    implement bcrypt password hashing   ← needs 1
+   4. [impl-sonnet]    wire the route handler              ← needs 1, 2, 3
+   ```
+
+3. **Fan out.** For all chunks at the same dependency level, emit
+   parallel Task tool calls **in the same assistant message**.
+   Claude Code runs them concurrently — independent chunks finish
+   in roughly the time of the slowest one.
+
+4. **Merge.** When the subagent results return, compile them into
+   one coherent answer in main Claude. Cite which chunk produced
+   which finding so the user can audit.
+
+### Agent selection cheat sheet
+
+| Subtask shape                          | Agent             |
+|----------------------------------------|-------------------|
+| find / locate / list / search / where  | recon-haiku       |
+| write small file / edit / fix bug      | impl-sonnet       |
+| add endpoint / route / integration     | api-sonnet        |
+| refactor / design / multi-file changes | architect-opus    |
+| auth / secret / crypto / migration     | secure-opus       |
+
+### When to skip decomposition
+
+- Trivial prompts (one file read, one edit, single grep).
+- User explicitly says "do this yourself" or "no agents".
+- Latency budget is tight — each subagent dispatch adds ~5-15 s of
+  overhead even when it returns quickly.
+
+### Token economics — why this beats main-Opus-handles-all
+
+For a typical 5-chunk multi-faceted prompt (recon + design + two
+impls + security), output token totals roughly:
+
+|                     | Tokens | Model           | Cost     |
+|---------------------|--------|-----------------|----------|
+| Recon               |   250  | Haiku           | $0.001   |
+| Two impl chunks     |  1200  | Sonnet          | $0.018   |
+| Architecture chunk  |  1700  | Opus high       | $0.043   |
+| Security chunk      |  2200  | Opus xhigh      | $0.055   |
+| **Total decomposed**|        |                 | **$0.12**|
+| Same in main Opus   |  7000  | Opus xhigh      | $0.18    |
+| **Saved per prompt**|        |                 | **~$0.06** (33%) |
+
+Wall-clock also drops because independent chunks run in parallel.
+
+### Explicit invocation
+
+The slash command `/router-plan <task>` forces decompose mode for a
+specific request even if Claude wouldn't have chosen it
+automatically.
+
 ## Subagent dispatch (the actually-working layer)
 
 Per-tool model override is best-effort — Claude Code's runtime may

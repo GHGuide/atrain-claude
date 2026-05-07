@@ -83,6 +83,35 @@ on how much accuracy you'll trade for token savings.
 | `/router-balanced` | 99%      | ~50% saved    | day-to-day work (default)           |
 | `/router-quality`  | 99.9%    | ~20% saved    | production code, security, finals   |
 
+## Decompose mode — split prompts, run chunks in parallel
+
+For multi-faceted prompts (3+ distinct concerns), use:
+
+```
+/router-plan rebuild the user signup flow with rate limiting and password reset
+```
+
+The router decomposes the request into chunks, each routed to the
+optimal subagent, and dispatches independent chunks **in parallel**.
+Token cost drops because each chunk runs on its right-sized model
+instead of one Opus session covering the whole thing. Wall time
+drops because parallel dispatch hides the slow chunks behind the
+fast ones.
+
+Typical 5-chunk plan:
+
+```
+1. [recon-haiku]    find existing signup code            (~250 tok, $0.001)
+2. [architect-opus] design rate-limit strategy           (~1700 tok, $0.043)
+3. [secure-opus]    bcrypt + reset-token hashing  ← needs 1   (~2200, $0.055)
+4. [api-sonnet]     POST /signup + POST /reset    ← needs 1,3 (~1100, $0.017)
+5. [impl-sonnet]    update sign-in handler        ← needs 3   (~600,  $0.009)
+                                                    total      ~$0.125
+```
+
+Same task done all in main Opus xhigh: ~$0.18. Saved: ~30%.
+Independent chunks (1, 2) finish in parallel.
+
 Each preset prints a confirmation card and resets per-session stats
 so `/smart-router-report` gives you a clean picture.
 
