@@ -467,6 +467,61 @@ def compute_confidence(tool_name, tool_input, decision_alias) -> float:
     return 0.80
 
 
+def compute_output_confidence(out_str: str, tool_name: str,
+                              had_error: bool, alias: str) -> float:
+    """AutoMix-lite: score how plausible a tool output looks. Below the
+    preset threshold the post-hook surfaces an escalate advisory.
+
+    Heuristics (no model call — must stay in the <50ms hook budget):
+    - Output has a real error signature → 0.10
+    - Output empty or whitespace-only → 0.20
+    - Output suspiciously short for the tool → 0.50
+    - Output reasonable length + clean structure → 0.85
+    - Output verbose with structure (lines / code blocks) → 0.95
+    """
+    if had_error:
+        return 0.10
+    if not out_str or not out_str.strip():
+        return 0.20
+    n = len(out_str)
+    expected_min = {
+        "Read": 5,
+        "Glob": 1,
+        "Grep": 1,
+        "LS": 5,
+        "Bash": 0,
+        "Write": 0,
+        "Edit": 0,
+        "MultiEdit": 0,
+    }.get(tool_name, 0)
+    if n < expected_min:
+        return 0.45
+    structure_signals = (
+        out_str.count("\n") >= 3,
+        "```" in out_str,
+        ":" in out_str[:200],
+    )
+    structure_score = sum(1 for s in structure_signals if s)
+    if alias == "haiku":
+        if n < 50:
+            return 0.55
+        if structure_score >= 2:
+            return 0.92
+        return 0.78
+    if alias == "sonnet":
+        if structure_score >= 2:
+            return 0.93
+        return 0.85
+    return 0.95
+
+
+def confidence_threshold(config: dict) -> float:
+    """Per-preset acceptance threshold for output confidence."""
+    mode = config.get("mode", "balanced")
+    return {"eco": 0.55, "balanced": 0.75,
+            "quality": 0.92, "precise": 0.95}.get(mode, 0.75)
+
+
 def classify_task(tool_name: str, tool_input, config: dict) -> dict:
     tool_str = _tool_str(tool_input)
     length = _content_length(tool_input)
@@ -1063,6 +1118,48 @@ def _handle_post_tool_use_inner(data: dict) -> None:
         }
         sys.stdout.write(json.dumps(out))
         return
+
+    # AutoMix-lite confidence-gated escalation (Pattern 3).
+    # Cheap heuristic: detect implausible output, advise retry on a
+    # stronger tier. Surfaces via additionalContext so Claude itself
+    # decides whether to redo the work — no silent retry loop.
+    out_conf = compute_output_confidence(out_str, tool_name, had_error, alias)
+    threshold = confidence_threshold(config)
+    advisory_parts = []
+    if out_conf < threshold and alias in ("haiku", "sonnet"):
+        next_tier = {"haiku": "sonnet+high", "sonnet": "opus+high"}[alias]
+        advisory_parts.append(
+            f"smart-router: previous {tool_name} output scored "
+            f"{out_conf:.2f} confidence (threshold {threshold:.2f} for "
+            f"{config.get('mode','balanced')} mode). "
+            f"Consider redoing this step on {next_tier} if the output "
+            "looks wrong, sparse, or truncated."
+        )
+        stats["escalations_output_verify"] = stats.get("escalations_output_verify", 0) + 1
+        save_config(config)
+
+    # Pattern 5 — sub-thread distillation hint for verbose Task results.
+    # When a subagent returns a long blob, suggest Claude distill it
+    # before merging into the supervisor context. Keeps the parent
+    # context lean across multi-chunk decompositions.
+    if tool_name == "Task" and len(out_str) > 8000:
+        approx_tokens = len(out_str) // 4
+        advisory_parts.append(
+            f"smart-router: Task subagent returned ~{approx_tokens} tokens "
+            f"({len(out_str)} chars). Before merging into your reply, distill "
+            "to <400 tokens — keep findings + file:line citations, drop "
+            "scratch reasoning. Cite the chunk so the user can audit."
+        )
+
+    if advisory_parts:
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "\n\n".join(advisory_parts),
+            }
+        }
+        sys.stdout.write(json.dumps(out))
+        return
     sys.stdout.write("{}")
 
 
@@ -1524,6 +1621,48 @@ def run_tests() -> None:
             worked = False
         record("T26", raised and worked,
                f"raised={raised}, second_use_worked={worked}")
+
+        # T27: compute_output_confidence on plausible vs implausible outputs
+        c_empty = compute_output_confidence("", "Read", False, "haiku")
+        c_short = compute_output_confidence("ok", "Read", False, "haiku")
+        c_good = compute_output_confidence(
+            "found 3 matches:\n  src/a.ts:12 TODO\n  src/b.ts:5 TODO\n",
+            "Grep", False, "haiku")
+        record("T27",
+               c_empty < 0.30 and c_short < 0.70 and c_good > 0.85,
+               f"empty={c_empty}, short={c_short}, good={c_good}")
+
+        # T28: post-hook injects confidence advisory on weak haiku output
+        atomic_write_json(CONFIG_PATH, _default_config())
+        save_session_log("t28", [])
+        out = capture(handle_post_tool_use, {
+            "hook_event": "PostToolUse",
+            "tool_name": "Read",
+            "tool_output": "x",  # implausibly short
+            "model_used": "claude-haiku-4-5-20251001",
+            "effort_used": "none",
+            "session_id": "t28",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T28",
+               "confidence" in ctx.lower() and ("sonnet" in ctx.lower()
+                                                or "opus" in ctx.lower()),
+               f"ctx={ctx[:140]!r}")
+
+        # T29: post-hook injects distillation advisory on verbose Task output
+        save_session_log("t29", [])
+        out = capture(handle_post_tool_use, {
+            "hook_event": "PostToolUse",
+            "tool_name": "Task",
+            "tool_output": "X" * 9000,
+            "model_used": "claude-sonnet-4-6",
+            "effort_used": "high",
+            "session_id": "t29",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T29",
+               "distill" in ctx.lower() and "400" in ctx,
+               f"ctx={ctx[:160]!r}")
 
     CONFIG_PATH = saved_config_path
 

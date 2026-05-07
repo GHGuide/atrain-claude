@@ -187,7 +187,15 @@ more about correctness than cost).
 3. Print the plan to the user.
 4. Dispatch all chunks at the same dependency level in parallel
    (multiple `Task` tool calls in the same assistant message).
-5. After results return, compile them into one answer. Cite which
+5. **Distill before merging.** When a subagent returns >2,000 tokens
+   of output, do not paste it verbatim into your reply. Distill to
+   under 400 tokens: keep findings, conclusions, and file:line
+   citations; drop scratch reasoning, intermediate searches, and
+   restated context. The PostToolUse hook will print an advisory
+   when this threshold is crossed — follow it. Distillation keeps
+   the supervisor context lean across multi-chunk dispatches and
+   lets the user audit each chunk's contribution.
+6. Compile distilled chunks into one coherent answer. Cite which
    chunk produced which finding.
 
 ### When NOT to decompose (even with `decompose_enabled=true`)
