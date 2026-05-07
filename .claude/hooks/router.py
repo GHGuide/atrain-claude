@@ -194,23 +194,35 @@ def atomic_write_json(path: Path, data: dict) -> None:
 def config_lock():
     """Cross-process lock for read-modify-write on router-config.json.
     Prevents concurrent hook invocations from losing stat increments.
-    Failure to acquire lock falls back to unlocked I/O (best-effort)."""
+
+    Acquisition runs in its own try-block; the yield is outside it so
+    a caller's OSError (e.g. a transient FS error during atomic_write_json)
+    cannot be swallowed by the acquisition's except and re-yielded —
+    that would violate the contextmanager contract (generator must
+    yield exactly once)."""
     lock_path = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".lock")
     fd = None
+    locked = False
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = open(lock_path, "w")
-        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
-        yield
+        try:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+            locked = True
+        except (OSError, ValueError):
+            locked = False
     except (OSError, ValueError):
-        # POSIX lock unavailable — fall through unlocked
+        fd = None
+        locked = False
+    try:
         yield
     finally:
         if fd is not None:
-            try:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-            except (OSError, ValueError):
-                pass
+            if locked:
+                try:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+                except (OSError, ValueError):
+                    pass
             try:
                 fd.close()
             except OSError:
@@ -480,23 +492,28 @@ def classify_task(tool_name: str, tool_input, config: dict) -> dict:
         return {"model_alias": "opus", "effort": eff,
                 "reason": f"multi-file ({n_paths} paths)"}
 
+    # READ-ONLY tools route to haiku regardless of precise mode.
+    # No correctness risk on Read/LS/Glob/Grep/safe-Bash — gating these
+    # behind `not precise` triples cost on read-only ops. PRECISE only
+    # affects writes/formatters.
+    if tool_name in ("Read", "LS", "Glob") and length < 300:
+        return {"model_alias": "haiku", "effort": "none",
+                "reason": f"small {tool_name} ({length} chars)"}
+    if tool_name == "Grep" and length < 150:
+        return {"model_alias": "haiku", "effort": "none",
+                "reason": "small Grep"}
+    if tool_name == "WebSearch" and length < 100:
+        return {"model_alias": "haiku", "effort": "none",
+                "reason": "short WebSearch"}
+    if tool_name == "Bash":
+        cmd = ""
+        if isinstance(tool_input, dict):
+            cmd = str(tool_input.get("command", ""))
+        if HAIKU_BASH_RE.match(cmd):
+            return {"model_alias": "haiku", "effort": "none",
+                    "reason": "read-only Bash"}
     if not precise:
-        if tool_name in ("Read", "LS", "Glob") and length < 300:
-            return {"model_alias": "haiku", "effort": "none",
-                    "reason": f"small {tool_name} ({length} chars)"}
-        if tool_name == "Grep" and length < 150:
-            return {"model_alias": "haiku", "effort": "none",
-                    "reason": "small Grep"}
-        if tool_name == "WebSearch" and length < 100:
-            return {"model_alias": "haiku", "effort": "none",
-                    "reason": "short WebSearch"}
-        if tool_name == "Bash":
-            cmd = ""
-            if isinstance(tool_input, dict):
-                cmd = str(tool_input.get("command", ""))
-            if HAIKU_BASH_RE.match(cmd):
-                return {"model_alias": "haiku", "effort": "none",
-                        "reason": "read-only Bash"}
+        # Formatters (write side-effects) — only haiku in non-precise mode
         formatters = ("prettier", "black", "eslint --fix", "gofmt")
         if tool_name == "Bash" and isinstance(tool_input, dict):
             cmd_lower = str(tool_input.get("command", "")).lower().lstrip()
@@ -609,26 +626,34 @@ def _classify_escalation_kind(reason: str) -> str:
 
 
 def classify_to_agent(full_text: str, config: dict) -> str:
-    """Pick the router agent that best fits the task text."""
+    """Pick the router agent that best fits the task text. Consults
+    routing_tables[mode][tier] so eco/balanced/quality biases actually
+    take effect on Task dispatches (not just per-tool-call routing)."""
     text = full_text.lower()
+    mode = config.get("mode", "balanced")
+    table = config.get("routing_tables", {}).get(mode, {})
+
+    def via_table(tier: str, fallback: str) -> str:
+        return table.get(tier, fallback)
+
     if any(kw in text for kw in config.get("hard_escalation_keywords", [])):
-        return "secure-opus"
+        return via_table("sensitive", "secure-opus")
     arch_kw = ("architecture", "design pattern", "refactor entire",
                "redesign", "bottleneck", "optimize", "review all",
                "performance optimization", "system design")
     if any(k in text for k in arch_kw):
-        return "architect-opus"
+        return via_table("architecture", "architect-opus")
     api_kw = ("endpoint", " route", "api integration", "third-party",
               "http handler", "rest api", "graphql")
     if any(k in text for k in api_kw):
-        return "api-sonnet"
+        return via_table("api", "api-sonnet")
     recon_kw = ("find ", "where is", "list files", "search for",
                 "look up", "show me", "explore", "grep ", "locate")
     write_kw = ("implement", "write a", "build a", "fix the",
                 "edit ", "modify", "refactor ", "add a", "create a")
     if any(k in text for k in recon_kw) and not any(k in text for k in write_kw):
-        return "recon-haiku"
-    return "impl-sonnet"
+        return via_table("recon", "recon-haiku")
+    return via_table("impl", "impl-sonnet")
 
 
 def handle_task_dispatch(data: dict) -> None:
@@ -1101,19 +1126,36 @@ def handle_session_end(data: dict) -> None:
 
 
 def update_model_registry() -> None:
+    """Refresh model IDs from Anthropic API JSON on stdin.
+    Only bumps last_model_check when at least one ID actually changed —
+    silent no-ops (auth failure, empty response, no newer model) emit
+    a clear stderr message and exit 1, so the staleness reminder fires
+    next session instead of being suppressed by a misleading timestamp."""
     config = load_config()
     try:
         raw = sys.stdin.read()
         api_resp = json.loads(raw) if raw.strip() else {}
     except (ValueError, OSError):
         api_resp = {}
+    before = {a: config["model_registry"][a]["id"]
+              for a in ("opus", "sonnet", "haiku")}
     _apply_registry_update(config, api_resp)
+    after = {a: config["model_registry"][a]["id"]
+             for a in ("opus", "sonnet", "haiku")}
+    changed = {a: (before[a], after[a]) for a in before if before[a] != after[a]}
+
+    if not changed:
+        sys.stderr.write(
+            "smart-router: --update-models ran but no IDs changed.\n"
+            "Possible causes: auth failure, empty response, or registry "
+            "already current. last_model_check NOT bumped.\n"
+        )
+        sys.exit(1)
+
     config["last_model_check"] = datetime.now().isoformat()
     save_config(config)
-    o = config["model_registry"]["opus"]["id"]
-    s = config["model_registry"]["sonnet"]["id"]
-    h = config["model_registry"]["haiku"]["id"]
-    sys.stdout.write(f"smart-router: registry updated → {o} | {s} | {h}\n")
+    diffs = " | ".join(f"{a}: {b}→{c}" for a, (b, c) in changed.items())
+    sys.stdout.write(f"smart-router: registry updated — {diffs}\n")
 
 
 def run_tests() -> None:
@@ -1414,6 +1456,74 @@ def run_tests() -> None:
                and rx.search("author of the book") is None
                and rx.search("api_keyword variable") is None,
                "boundary regex must not match author/api_keyword")
+
+        # T23: precise mode allows haiku for read-only tools (regression
+        # fix from v3.2 — was forcing opus on Read in precise mode)
+        precise_cfg = _default_config()
+        precise_cfg["accuracy_target"] = 99.9
+        atomic_write_json(CONFIG_PATH, precise_cfg)
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"path": "src/index.ts"},
+            "session_id": "t23",
+        })
+        record("T23",
+               "haiku" in out.get("model_override", "")
+               and "effort" not in out,
+               f"out={out}")
+
+        # T24: classify_to_agent honors routing_tables[mode]
+        #      quality mode maps recon → impl-sonnet (not recon-haiku)
+        quality_cfg = _default_config()
+        quality_cfg["mode"] = "quality"
+        quality_cfg["accuracy_target"] = 99.9
+        atomic_write_json(CONFIG_PATH, quality_cfg)
+        agent = classify_to_agent("find existing webhook handlers",
+                                  quality_cfg)
+        record("T24", agent == "impl-sonnet",
+               f"got {agent}, expected impl-sonnet")
+
+        # T25: update_model_registry with empty response → exit 1, no bump
+        atomic_write_json(CONFIG_PATH, _default_config())
+        original_check = load_config()["last_model_check"]
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO("")  # empty stdin
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        exit_code = 0
+        try:
+            update_model_registry()
+        except SystemExit as e:
+            exit_code = e.code or 0
+        finally:
+            sys.stdin = old_stdin
+            sys.stderr = old_stderr
+            sys.stdout = old_stdout
+        after = load_config()["last_model_check"]
+        record("T25",
+               exit_code == 1 and after == original_check,
+               f"exit_code={exit_code}, before={original_check}, after={after}")
+
+        # T26: config_lock survives caller-raised exception cleanly
+        atomic_write_json(CONFIG_PATH, _default_config())
+        raised = False
+        try:
+            with config_lock():
+                raise OSError("simulated FS error during caller body")
+        except OSError:
+            raised = True
+        # second use must work — not contaminated by previous exception
+        worked = False
+        try:
+            with config_lock():
+                worked = True
+        except Exception:
+            worked = False
+        record("T26", raised and worked,
+               f"raised={raised}, second_use_worked={worked}")
 
     CONFIG_PATH = saved_config_path
 
