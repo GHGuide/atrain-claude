@@ -4,6 +4,8 @@
 Stdlib only. Never crashes — wraps everything and returns {} on error.
 Atomic file writes via .tmp + os.replace. Hook latency target <50ms.
 """
+import contextlib
+import fcntl
 import io
 import json
 import os
@@ -106,11 +108,21 @@ def _default_config() -> dict:
             "consistency_runs": 1,
         },
         "hard_escalation_keywords": [
-            "auth", "authentication", "password", "secret", "api_key",
-            "private_key", "access_token", "refresh_token", "crypto",
-            "encrypt", "decrypt", "hash", "migration", "sql schema",
-            "production", "deploy to", "main branch", "master branch",
-            ".env", "dotenv", "certificate", "ssl", "tls",
+            "auth", "authentication", "authorize", "rbac",
+            "password", "secret", "api_key", "private_key",
+            "access_token", "refresh_token", "bearer", "jwt",
+            "encrypt", "decrypt", "aes", "rsa", "ecdsa",
+            "cipher", "signing key",
+            "password hash", "bcrypt", "argon2", "scrypt", "pbkdf2",
+            "db migration", "schema migration", "alter table",
+            "drop column", "drop table",
+            ".env", "dotenv",
+            "certificate", "ssl", "tls", "cors", "csrf", "samesite",
+            "sanitize", "xss", "sql injection",
+            "webhook signature", "hmac",
+            "to production", "in production", "prod database",
+            "deploy to", "main branch", "master branch",
+            "oauth",
         ],
         "agent_registry": dict(AGENT_REGISTRY),
         "decompose_enabled": False,
@@ -148,6 +160,75 @@ def atomic_write_json(path: Path, data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def config_lock():
+    """Cross-process lock for read-modify-write on router-config.json.
+    Prevents concurrent hook invocations from losing stat increments.
+    Failure to acquire lock falls back to unlocked I/O (best-effort)."""
+    lock_path = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".lock")
+    fd = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = open(lock_path, "w")
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        yield
+    except (OSError, ValueError):
+        # POSIX lock unavailable — fall through unlocked
+        yield
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            except (OSError, ValueError):
+                pass
+            try:
+                fd.close()
+            except OSError:
+                pass
+
+
+def detect_multi_faceted(prompt: str) -> tuple:
+    """Heuristic — does the prompt look like it would benefit from
+    decomposition? Returns (is_multi, signals_list).
+
+    Signals (need 2+ to fire):
+    - length > 200 chars
+    - 2+ conjunctions ("and", "also", "plus", "then", ";")
+    - 3+ list items (markdown bullets or numbered)
+    - 3+ distinct action verbs
+    - 2+ file/path references
+    """
+    if not prompt or not isinstance(prompt, str):
+        return (False, [])
+    p = prompt.lower()
+    signals = []
+    if len(prompt) > 200:
+        signals.append(f"len={len(prompt)}")
+    conjunctions = (" and ", " also ", " plus ", " then ", "; ", ", and ")
+    n_conj = sum(p.count(c) for c in conjunctions)
+    if n_conj >= 2:
+        signals.append(f"conjunctions={n_conj}")
+    list_items = re.findall(r"(?m)^\s*(?:[-*]\s|\d+[.)]\s)", prompt)
+    if len(list_items) >= 3:
+        signals.append(f"list-items={len(list_items)}")
+    action_verbs = (
+        "add", "write", "create", "build", "fix", "refactor",
+        "implement", "design", "test", "review", "find", "update",
+        "remove", "delete", "rename", "wire", "extract", "validate",
+        "check", "audit", "optimize", "rewrite",
+    )
+    verbs_found = set()
+    for v in action_verbs:
+        if re.search(rf"(?<!\w){v}(?!\w)", p):
+            verbs_found.add(v)
+    if len(verbs_found) >= 3:
+        signals.append(f"verbs={len(verbs_found)}")
+    paths = re.findall(r"[\w./-]+\.(?:py|ts|tsx|js|jsx|md|json|yml|yaml|sql|go|rs|java|kt|swift|rb|php|cs|cpp|c|h|hpp)\b", prompt)
+    if len(paths) >= 2:
+        signals.append(f"paths={len(paths)}")
+    return (len(signals) >= 2, signals)
 
 
 def load_config() -> dict:
@@ -229,9 +310,14 @@ _ERROR_LINE_RE = re.compile(
 )
 
 
-def _detect_error(out_str: str) -> bool:
-    """Detect real errors. Skip false positives from logged/quoted strings."""
+def _detect_error(out_str: str, exit_code=None, tool_name: str = "") -> bool:
+    """Detect real errors. Skip false positives from logged/quoted strings.
+    For Bash, REQUIRE non-zero exit code — many legitimate Bash outputs
+    contain 'Traceback' as data (grep, git log, log files).
+    """
     if not out_str:
+        return False
+    if tool_name == "Bash" and exit_code is not None and exit_code == 0:
         return False
     sample = out_str[-4000:]
     if "PASS\n" in sample and "test results" in sample.lower():
@@ -538,6 +624,11 @@ def classify_to_agent(full_text: str, config: dict) -> str:
 
 
 def handle_task_dispatch(data: dict) -> None:
+    with config_lock():
+        return _handle_task_dispatch_inner(data)
+
+
+def _handle_task_dispatch_inner(data: dict) -> None:
     config = load_config()
     tool_input = data.get("tool_input", {}) or {}
     session_id = data.get("session_id", "default")
@@ -657,41 +748,72 @@ def handle_session_start(data: dict) -> None:
 
 
 def handle_user_prompt_submit(data: dict) -> None:
-    """On first user prompt of session, suggest a preset."""
+    """Hybrid: first prompt → suggest preset; structurally multi-faceted
+    prompt → suggest decompose. Both run silently as advisory context."""
     config = load_config()
     session_id = data.get("session_id", "default")
+    prompt = str(data.get("prompt") or data.get("user_prompt") or "")
     log = load_session_log(session_id)
     is_first = not any(e.get("phase") == "pre" for e in log)
-    if not is_first:
+    mode = config.get("mode", "balanced")
+    decompose_on = bool(config.get("decompose_enabled", False))
+    is_multi, signals = detect_multi_faceted(prompt)
+
+    parts = []
+    if is_first:
+        parts.append(
+            f"smart-router active (mode: {mode}). Three presets: "
+            "/router-eco (95% acc, ~90% saved), "
+            "/router-balanced (99% acc, ~50% saved, default), "
+            "/router-quality (99.9% acc, ~20% saved). "
+            "Briefly mention these once at the start of the first response, "
+            "then proceed with the user's task. Auto-pick eco only if the "
+            "user signals cost-sensitivity, quality only if they signal "
+            "high stakes."
+        )
+
+    if is_multi and not decompose_on:
+        parts.append(
+            f"This prompt looks multi-faceted (signals: {', '.join(signals)}). "
+            "Consider decomposing it into 2-5 parallel subagent chunks via "
+            "the smart-router pattern (recon-haiku for read-only, "
+            "impl-sonnet for bounded code-writing, architect-opus for "
+            "design/multi-file, secure-opus for auth/secret/crypto). "
+            "Dispatch independent chunks in parallel via Task tool calls "
+            "in the same assistant message. To enable this for the whole "
+            "session: /router-on. To force just this one prompt: "
+            "/router-once. If you decompose, print the plan first."
+        )
+    elif decompose_on:
+        parts.append(
+            f"decompose_enabled=true ({mode} bias). Reason about this "
+            "prompt's subtasks, plan 2-7 chunks with subagent assignments, "
+            "print the plan, then dispatch independent chunks in parallel. "
+            "Skip decomposition only if the prompt is trivially single-step."
+        )
+    elif is_multi and decompose_on:
+        # both true — same as decompose_on path
+        pass
+
+    if not parts:
         sys.stdout.write("{}")
         return
-    mode = config.get("mode", "balanced")
-    msg = (
-        f"smart-router is active. Current mode: **{mode}**.\n"
-        "If the user has not selected a preset yet, briefly mention the "
-        "three options at the start of your response and ask which they "
-        "prefer:\n"
-        "  /router-eco       — 95% accuracy, ~90% tokens saved "
-        "(prototypes, recon, exploration)\n"
-        "  /router-balanced  — 99% accuracy, ~50% tokens saved "
-        "(day-to-day, default)\n"
-        "  /router-quality   — 99.9% accuracy, ~20% tokens saved "
-        "(production, security, finals)\n"
-        "Be brief — one sentence framing + the three options as a list. "
-        "Do NOT pick for the user unless they signal a clear preference "
-        "in their message (cost-sensitive language → eco; "
-        "high-stakes language → quality). After mentioning the options, "
-        "proceed with the user's task using the current mode."
-    )
     sys.stdout.write(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": msg,
+            "additionalContext": "\n\n".join(parts),
         }
     }))
 
 
 def handle_pre_tool_use(data: dict) -> None:
+    if data.get("tool_name") == "Task":
+        return handle_task_dispatch(data)
+    with config_lock():
+        return _handle_pre_tool_use_inner(data)
+
+
+def _handle_pre_tool_use_inner(data: dict) -> None:
     config = load_config()
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {}) or {}
@@ -797,6 +919,11 @@ def _alias_from_model(model_used: str) -> str:
 
 
 def handle_post_tool_use(data: dict) -> None:
+    with config_lock():
+        return _handle_post_tool_use_inner(data)
+
+
+def _handle_post_tool_use_inner(data: dict) -> None:
     config = load_config()
     tool_name = data.get("tool_name", "")
     tool_output = (data.get("tool_output", "")
@@ -842,7 +969,10 @@ def handle_post_tool_use(data: dict) -> None:
         stats["baseline_opus_xhigh_cost_usd"] - stats["estimated_cost_usd"]
     )
 
-    had_error = _detect_error(out_str)
+    exit_code = data.get("exit_code")
+    if exit_code is None and isinstance(data.get("tool_response"), dict):
+        exit_code = data["tool_response"].get("exit_code")
+    had_error = _detect_error(out_str, exit_code=exit_code, tool_name=tool_name)
 
     precise = config.get("accuracy_target", 99.0) >= 99.9
     verify_resp = None
@@ -904,49 +1034,62 @@ def handle_post_tool_use(data: dict) -> None:
 
 
 def handle_session_end(data: dict) -> None:
-    config = load_config()
-    session_id = data.get("session_id", "default")
-    log = load_session_log(session_id)
+    """Bounded calibration. Floor 20 haiku calls; bound delta to ±0.005;
+    skip if 7-session moving average diverges (noisy signal)."""
+    with config_lock():
+        config = load_config()
+        session_id = data.get("session_id", "default")
+        log = load_session_log(session_id)
 
-    posts = [e for e in log if e.get("phase") == "post"]
-    haiku_posts = [e for e in posts if e.get("tier", "").startswith("haiku")]
-    haiku_trusted = sum(1 for e in haiku_posts if not e.get("escalated"))
-    haiku_escalated = sum(1 for e in haiku_posts if e.get("escalated"))
-    total_haiku = haiku_trusted + haiku_escalated
-    trust_rate = 0.0
-    delta = 0.0
-    mode = config.get("mode", "balanced")
+        posts = [e for e in log if e.get("phase") == "post"]
+        haiku_posts = [e for e in posts if e.get("tier", "").startswith("haiku")]
+        haiku_trusted = sum(1 for e in haiku_posts if not e.get("escalated"))
+        haiku_escalated = sum(1 for e in haiku_posts if e.get("escalated"))
+        total_haiku = haiku_trusted + haiku_escalated
+        trust_rate = 0.0
+        delta = 0.0
+        mode = config.get("mode", "balanced")
+        history = config.get("calibration_history", [])
+        recent_avg = None
 
-    if total_haiku > 5:
-        trust_rate = haiku_trusted / total_haiku
-        if trust_rate > 0.90 and mode != "fast":
+        if total_haiku >= 20:
+            trust_rate = haiku_trusted / total_haiku
+            recent = [h.get("trust_rate", 0.0) for h in history[-6:]] + [trust_rate]
+            recent_avg = sum(recent) / len(recent)
+            if abs(recent_avg - trust_rate) > 0.20:
+                # noisy single-session signal — skip drift
+                pass
+            elif trust_rate > 0.92 and mode not in ("fast", "eco"):
+                current = config["thresholds"].get("haiku_confidence_min", 0.88)
+                config["thresholds"]["haiku_confidence_min"] = max(0.5, current - 0.005)
+                delta = -0.005
+                sys.stdout.write("smart-router: haiku threshold relaxed\n")
+            elif trust_rate < 0.70:
+                current = config["thresholds"].get("haiku_confidence_min", 0.88)
+                config["thresholds"]["haiku_confidence_min"] = min(0.99, current + 0.005)
+                delta = 0.005
+                sys.stdout.write("smart-router: haiku threshold tightened\n")
+
+        output_verify_count = sum(
+            1 for e in posts if e.get("escalation_reason") in ("error_in_output", "empty_output")
+        )
+        if output_verify_count > 0 and total_haiku >= 20:
             current = config["thresholds"].get("haiku_confidence_min", 0.88)
-            config["thresholds"]["haiku_confidence_min"] = max(0.5, current - 0.005)
-            delta -= 0.005
-            sys.stdout.write("smart-router: haiku threshold relaxed\n")
-        if trust_rate < 0.70:
-            current = config["thresholds"].get("haiku_confidence_min", 0.88)
-            config["thresholds"]["haiku_confidence_min"] = min(0.99, current + 0.01)
-            delta += 0.01
-            sys.stdout.write("smart-router: haiku threshold tightened\n")
+            tighten = min(0.005, 0.005 - delta if delta < 0 else 0.005)
+            config["thresholds"]["haiku_confidence_min"] = min(0.99, current + tighten)
+            delta += tighten
 
-    output_verify_count = sum(
-        1 for e in posts if e.get("escalation_reason") in ("error_in_output", "empty_output")
-    )
-    if output_verify_count > 0:
-        current = config["thresholds"].get("haiku_confidence_min", 0.88)
-        config["thresholds"]["haiku_confidence_min"] = min(0.99, current + 0.01)
-        delta += 0.01
-
-    config.setdefault("calibration_history", []).append({
-        "date": datetime.now().isoformat(),
-        "mode": mode,
-        "trust_rate": trust_rate,
-        "adjustment": delta,
-        "total_calls": len(posts),
-    })
-    save_config(config)
-    sys.stdout.write("smart-router: session calibration complete.\n")
+        config.setdefault("calibration_history", []).append({
+            "date": datetime.now().isoformat(),
+            "mode": mode,
+            "trust_rate": trust_rate,
+            "adjustment": delta,
+            "total_calls": len(posts),
+            "total_haiku": total_haiku,
+            "moving_avg": recent_avg,
+        })
+        save_config(config)
+        sys.stdout.write("smart-router: session calibration complete.\n")
 
 
 def update_model_registry() -> None:
@@ -1114,10 +1257,10 @@ def run_tests() -> None:
         record("T11", cfg["session_stats"]["calls_by_tier"]["opus_xhigh"] >= 1,
                f"calls={cfg['session_stats']['calls_by_tier']}")
 
-        # T12
+        # T12 — 20-call floor: 16 trusted + 4 errored = trust 0.80
         sid = "t12_unique"
         save_session_log(sid, [])
-        for _ in range(8):
+        for _ in range(16):
             capture(handle_post_tool_use, {
                 "hook_event": "PostToolUse",
                 "tool_name": "Read",
@@ -1126,13 +1269,14 @@ def run_tests() -> None:
                 "effort_used": "none",
                 "session_id": sid,
             })
-        for _ in range(2):
+        for _ in range(4):
             capture(handle_post_tool_use, {
                 "hook_event": "PostToolUse",
                 "tool_name": "Bash",
                 "tool_output": "Traceback (most recent call last):\n  File \"a.py\", line 1\nNameError: x",
                 "model_used": "claude-haiku-4-5-20251001",
                 "effort_used": "none",
+                "exit_code": 1,
                 "session_id": sid,
             })
         buf = io.StringIO()
@@ -1217,6 +1361,51 @@ def run_tests() -> None:
                and cfg["model_registry"]["sonnet"]["id"] == "claude-sonnet-4-8"
                and cfg["model_registry"]["haiku"]["id"] == "claude-haiku-4-6-20260301",
                f"registry={cfg['model_registry']}")
+
+        # T17: detect_multi_faceted — multi-faceted prompt → True
+        is_multi, sigs = detect_multi_faceted(
+            "Add a webhook handler with HMAC verification and write tests "
+            "for it. Also update the README and refactor the auth module "
+            "to use the new logger."
+        )
+        record("T17", is_multi and len(sigs) >= 2,
+               f"is_multi={is_multi}, signals={sigs}")
+
+        # T18: detect_multi_faceted — simple prompt → False
+        is_multi, sigs = detect_multi_faceted("show me the package.json")
+        record("T18", not is_multi, f"is_multi={is_multi}, signals={sigs}")
+
+        # T19: UserPromptSubmit injects decompose suggestion when multi-faceted
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t19_unique",
+            "prompt": "build a CRUD API for users with bcrypt password "
+                      "hashing, add input validation, write integration "
+                      "tests, and update the OpenAPI spec",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T19", "multi-faceted" in ctx.lower() or "decompos" in ctx.lower(),
+               f"ctx_excerpt={ctx[:140]!r}")
+
+        # T20: _detect_error skips Bash with exit_code=0
+        record("T20", _detect_error(
+            "grep result: line with Traceback (most recent call last):",
+            exit_code=0, tool_name="Bash") is False,
+            "Bash exit_code=0 should not flag errors")
+
+        # T21: _detect_error fires on Bash exit_code != 0 with traceback
+        record("T21", _detect_error(
+            "Traceback (most recent call last):\n  File \"x.py\", line 1\n",
+            exit_code=1, tool_name="Bash") is True,
+            "Bash exit_code=1 with traceback should flag")
+
+        # T22: _build_sensitive_re respects token boundaries
+        rx = _build_sensitive_re(["auth", "api_key"])
+        record("T22",
+               rx.search("src/auth/login.ts") is not None
+               and rx.search("author of the book") is None
+               and rx.search("api_keyword variable") is None,
+               "boundary regex must not match author/api_keyword")
 
     CONFIG_PATH = saved_config_path
 
