@@ -43,7 +43,9 @@ step:
 ```bash
 python3 - <<'EOF'
 import json, os, pathlib
-p = pathlib.Path(".claude/router-config.json")
+home = pathlib.Path.home() / ".claude" / "router-config.json"
+proj = pathlib.Path(".claude/router-config.json")
+p = home if home.exists() else proj
 cfg = json.loads(p.read_text())
 cfg["mode"] = "eco"
 cfg["accuracy_target"] = 95.0

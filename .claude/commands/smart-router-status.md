@@ -73,7 +73,9 @@ Run via inline Python so the math and JSON read happen in one step:
 ```bash
 python3 - <<'EOF'
 import json, pathlib
-cfg = json.loads(pathlib.Path(".claude/router-config.json").read_text())
+_h = pathlib.Path.home() / ".claude" / "router-config.json"
+_p = pathlib.Path(".claude/router-config.json")
+cfg = json.loads((_h if _h.exists() else _p).read_text())
 # format and print the four blocks above
 EOF
 ```
