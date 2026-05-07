@@ -604,34 +604,67 @@ def _apply_registry_update(config: dict, api_resp: dict) -> None:
 
 
 def handle_session_start(data: dict) -> None:
+    """No network. Bundled-tokens-only. Manual refresh via --update-models."""
     config = load_config()
     last_check = config.get("last_model_check", "")
-    age_hours = 999.0
     try:
         last_dt = datetime.fromisoformat(last_check)
         age_hours = (datetime.now() - last_dt).total_seconds() / 3600.0
     except (ValueError, TypeError):
-        pass
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if age_hours > 24 and api_key:
-        try:
-            req = urllib.request.Request(
-                MODELS_API_URL,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=2) as r:
-                api_resp = json.loads(r.read().decode("utf-8"))
-            _apply_registry_update(config, api_resp)
-            config["last_model_check"] = datetime.now().isoformat()
-            save_config(config)
-        except (urllib.error.URLError, ValueError, OSError, TimeoutError):
-            pass
-
+        age_hours = 999.0
+    if age_hours > 24 * 30:
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": (
+                    "smart-router: model registry was last refreshed "
+                    f"{int(age_hours/24)} days ago. To pick up newer "
+                    "Anthropic models, run from a shell with "
+                    "ANTHROPIC_API_KEY set:\n"
+                    "  curl -s https://api.anthropic.com/v1/models "
+                    "-H \"x-api-key: $ANTHROPIC_API_KEY\" "
+                    "-H \"anthropic-version: 2023-06-01\" | "
+                    "python3 .claude/hooks/router.py --update-models"
+                ),
+            }
+        }))
+        return
     sys.stdout.write("{}")
+
+
+def handle_user_prompt_submit(data: dict) -> None:
+    """On first user prompt of session, suggest a preset."""
+    config = load_config()
+    session_id = data.get("session_id", "default")
+    log = load_session_log(session_id)
+    is_first = not any(e.get("phase") == "pre" for e in log)
+    if not is_first:
+        sys.stdout.write("{}")
+        return
+    mode = config.get("mode", "balanced")
+    msg = (
+        f"smart-router is active. Current mode: **{mode}**.\n"
+        "If the user has not selected a preset yet, briefly mention the "
+        "three options at the start of your response and ask which they "
+        "prefer:\n"
+        "  /router-eco       — 95% accuracy, ~90% tokens saved "
+        "(prototypes, recon, exploration)\n"
+        "  /router-balanced  — 99% accuracy, ~50% tokens saved "
+        "(day-to-day, default)\n"
+        "  /router-quality   — 99.9% accuracy, ~20% tokens saved "
+        "(production, security, finals)\n"
+        "Be brief — one sentence framing + the three options as a list. "
+        "Do NOT pick for the user unless they signal a clear preference "
+        "in their message (cost-sensitive language → eco; "
+        "high-stakes language → quality). After mentioning the options, "
+        "proceed with the user's task using the current mode."
+    )
+    sys.stdout.write(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": msg,
+        }
+    }))
 
 
 def handle_pre_tool_use(data: dict) -> None:
@@ -1206,6 +1239,8 @@ def main() -> None:
             handle_pre_tool_use(data)
         elif event == "PostToolUse":
             handle_post_tool_use(data)
+        elif event == "UserPromptSubmit":
+            handle_user_prompt_submit(data)
         elif event == "SessionStart":
             handle_session_start(data)
         elif event == "SessionEnd":

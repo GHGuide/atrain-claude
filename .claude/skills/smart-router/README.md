@@ -56,12 +56,20 @@ API so the registry never goes stale.
 4. Start a new Claude Code session in this directory. The hooks
    activate automatically via `.claude/settings.json`.
 
-5. (Optional) Set `ANTHROPIC_API_KEY` so SessionStart can
-   auto-refresh the model registry every 24 hours:
+5. (Optional) Manually refresh the model registry when Anthropic
+   ships a new model. Requires an API key only for this one-shot
+   refresh; day-to-day routing uses your Claude Code bundled tokens.
 
    ```bash
-   export ANTHROPIC_API_KEY=...
+   curl -s https://api.anthropic.com/v1/models \
+     -H "x-api-key: $ANTHROPIC_API_KEY" \
+     -H "anthropic-version: 2023-06-01" \
+     | python3 .claude/hooks/router.py --update-models
    ```
+
+The plugin itself **never makes network calls during routing**. All
+classification runs locally in the Python hook; actual model calls
+go through Claude Code using your existing subscription quota.
 
 ## Subagents
 

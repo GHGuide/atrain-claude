@@ -76,14 +76,18 @@ so `/smart-router-report` gives you a clean picture.
 `max` is **session-scoped** — never persisted to `router-config.json`,
 reverts on the next call.
 
-## Auto-discovery
+## Bundled tokens — no API key required
 
-Whenever `last_model_check` is older than 24 hours and
-`ANTHROPIC_API_KEY` is set, the `SessionStart` hook fetches
-`https://api.anthropic.com/v1/models` and updates the registry to
-the latest version of each tier (`claude-opus-4-*`,
-`claude-sonnet-4-*`, `claude-haiku-4-*`). Failures silent — never
-blocks session start. Manual trigger:
+The plugin uses your existing Claude Code subscription quota. The
+hook never makes network calls during routing — all classification
+runs locally in stdlib Python. Actual model calls (the work Claude
+performs) go through Claude Code using your logged-in account.
+
+The model registry (the list of `claude-opus-4-*`, `claude-sonnet-4-*`,
+`claude-haiku-4-*` IDs) is shipped in `router-config.json` and stays
+current via plugin updates (`git pull`). If you want to refresh it
+yourself between releases, that one-shot refresh does need an API
+key:
 
 ```bash
 curl -s https://api.anthropic.com/v1/models \
@@ -91,6 +95,10 @@ curl -s https://api.anthropic.com/v1/models \
   -H "anthropic-version: 2023-06-01" \
   | python3 .claude/hooks/router.py --update-models
 ```
+
+If the registry is older than 30 days, the SessionStart hook prints
+a non-blocking reminder. Day-to-day routing keeps working with the
+shipped registry.
 
 ## Tests
 

@@ -108,44 +108,47 @@ def run_hook(payload: dict) -> dict:
         return {"_raw": proc.stdout}
 
 
-def call_api(model_id: str, user_msg: str) -> dict:
-    """Real Anthropic API call — returns {'in_tokens', 'out_tokens', 'text'}."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        return {"error": "no_api_key"}
-    body = {
-        "model": model_id,
-        "max_tokens": 1024,
-        "messages": [{"role": "user", "content": user_msg}],
-    }
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=json.dumps(body).encode(),
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-    )
+def call_claude_cli(model_id: str, user_msg: str) -> dict:
+    """Use Claude Code's bundled-token CLI (`claude -p`). NO API key needed.
+    Uses the user's logged-in Claude Code subscription quota."""
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            resp = json.loads(r.read().decode())
-        usage = resp.get("usage", {})
-        text = "".join(b.get("text","") for b in resp.get("content", []))
-        return {
-            "in_tokens": usage.get("input_tokens", 0),
-            "out_tokens": usage.get("output_tokens", 0),
-            "text": text[:200],
-        }
-    except Exception as e:
-        return {"error": str(e)}
+        proc = subprocess.run(
+            ["claude", "-p", user_msg,
+             "--model", model_id,
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=90,
+        )
+    except FileNotFoundError:
+        return {"error": "claude CLI not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    if proc.returncode != 0:
+        return {"error": f"exit {proc.returncode}: {proc.stderr.strip()[:200]}"}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"error": "non-JSON stdout", "raw": proc.stdout[:200]}
+    usage = data.get("usage", {}) or data.get("total_usage", {})
+    return {
+        "in_tokens": usage.get("input_tokens", 0),
+        "out_tokens": usage.get("output_tokens", 0),
+        "cache_read": usage.get("cache_read_input_tokens", 0),
+        "cache_write": usage.get("cache_creation_input_tokens", 0),
+        "text": (data.get("result") or data.get("text") or "")[:200],
+    }
 
 
 def main():
     real_mode = "--real" in sys.argv
-    if real_mode and not os.environ.get("ANTHROPIC_API_KEY"):
-        print("--real requires ANTHROPIC_API_KEY env var", file=sys.stderr)
-        sys.exit(2)
+    if real_mode:
+        # Verify claude CLI exists — bundled tokens, no API key
+        try:
+            subprocess.run(["claude", "--version"], capture_output=True,
+                           text=True, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            print("--real needs the `claude` CLI on PATH (Claude Code "
+                  "subscription). No API key required.", file=sys.stderr)
+            sys.exit(2)
 
     rows = []
     for i, p in enumerate(PROMPTS, 1):
@@ -178,9 +181,9 @@ def main():
 
         real = {}
         if real_mode:
-            sample_msg = f"Task: {p['label']}. Respond briefly."
-            real_with = call_api(with_model, sample_msg)
-            real_without = call_api(without_model, sample_msg)
+            sample_msg = f"Task: {p['label']}. Respond briefly in 1-2 sentences."
+            real_with = call_claude_cli(with_model, sample_msg)
+            real_without = call_claude_cli(without_model, sample_msg)
             real = {"with": real_with, "without": real_without}
 
         rows.append({
