@@ -1,0 +1,27 @@
+# Claude Code local user settings
+.claude/settings.local.json
+
+# Runtime session logs from the router hook
+/tmp/smart-router-*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Skill creator workspaces (eval runs)
+*-workspace/
