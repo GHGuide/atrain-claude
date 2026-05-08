@@ -1,6 +1,6 @@
 {
   "name": "smart-router",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Dynamic per-call selection of Claude model + effort level for Claude Code. Routes recon to Haiku, mid-size edits to Sonnet, architecture and security work to Opus. Self-calibrates from session error rate. Auto-discovers new models from the Anthropic API.",
   "author": {
     "name": "Metrcih"

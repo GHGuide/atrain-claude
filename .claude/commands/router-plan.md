@@ -75,6 +75,27 @@ for `eco`: an `api` chunk maps to `impl-sonnet` (downgraded from
 - Each subagent is stateless; pass any context it needs in the
   Task `prompt` field. Don't assume it can read prior chunks.
 
+## Worktree isolation when chunks would collide on writes
+
+When two chunks at the same dependency level both emit `Write` /
+`Edit` calls, pass `isolation: "worktree"` to the `Task` tool so
+Claude Code routes each subagent into its own git worktree. No race
+on the working tree, full parallelism. 4–8 concurrent worktrees per
+developer is reliable; the bottleneck above that is review, not
+Claude.
+
+Use worktree isolation for:
+- Cross-module refactors touching 3+ files in different directories
+- Migration tasks that rewrite many call sites at once
+- Any plan where two parallel chunks both write
+
+Skip worktree isolation when chunks are read-only, touch disjoint
+known paths, or run sequentially (only one writer at a time).
+
+After all worktrees finish, the main session reviews each diff and
+merges them with `git merge --no-ff worktree-branch`, surfacing any
+conflicts to the user before applying.
+
 ## What success looks like
 
 - Plan printed to the user before any dispatch.

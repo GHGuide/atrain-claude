@@ -1744,6 +1744,117 @@ def lint_skill(skill_path: Path = None) -> int:
     return 0
 
 
+def health_check() -> int:
+    """Comprehensive reliability audit. Returns exit code."""
+    sys.stdout.write("=== smart-router health check ===\n\n")
+    issues = []
+
+    # 1. Config integrity
+    sys.stdout.write("[1/6] config integrity\n")
+    try:
+        cfg = load_config()
+        required = ("model_registry", "thresholds", "agent_registry",
+                    "routing_tables", "session_stats")
+        missing = [k for k in required if k not in cfg]
+        if missing:
+            issues.append(f"config missing keys: {missing}")
+            sys.stdout.write(f"  FAIL — missing: {missing}\n")
+        else:
+            sys.stdout.write(f"  OK — version={cfg.get('version', '?')}, "
+                             f"mode={cfg.get('mode', '?')}\n")
+    except Exception as e:
+        issues.append(f"config load failed: {e}")
+        sys.stdout.write(f"  FAIL — {e}\n")
+
+    # 2. Lock acquisition
+    sys.stdout.write("[2/6] config_lock acquisition\n")
+    try:
+        with config_lock():
+            pass
+        sys.stdout.write("  OK\n")
+    except Exception as e:
+        issues.append(f"lock acquisition failed: {e}")
+        sys.stdout.write(f"  FAIL — {e}\n")
+
+    # 3. Routing decision smoke-test
+    sys.stdout.write("[3/6] routing decision smoke-test\n")
+    try:
+        cfg2 = load_config()
+        decision = classify_task("Read", {"path": "x.ts"}, cfg2)
+        if decision.get("model_alias") == "haiku":
+            sys.stdout.write("  OK — Read → haiku\n")
+        else:
+            issues.append(f"routing regression: Read returned {decision}")
+            sys.stdout.write(f"  FAIL — Read returned {decision}\n")
+    except Exception as e:
+        issues.append(f"classify_task error: {e}")
+        sys.stdout.write(f"  FAIL — {e}\n")
+
+    # 4. SKILL.md drift lint
+    sys.stdout.write("[4/6] SKILL.md drift lint\n")
+    lint_buf = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = lint_buf
+    try:
+        lint_code = lint_skill()
+    except SystemExit as e:
+        lint_code = e.code or 0
+    finally:
+        sys.stdout = saved_stdout
+    if lint_code == 0:
+        sys.stdout.write("  OK — SKILL.md mirrors classify_task\n")
+    else:
+        issues.append("SKILL.md drift detected")
+        sys.stdout.write(f"  FAIL — {lint_buf.getvalue().strip()}\n")
+
+    # 5. Test suite
+    sys.stdout.write("[5/6] test suite\n")
+    test_buf = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = test_buf
+    try:
+        run_tests()
+        test_code = 0
+    except SystemExit as e:
+        test_code = e.code or 0
+    finally:
+        sys.stdout = saved_stdout
+    test_output = test_buf.getvalue()
+    last_line = test_output.strip().splitlines()[-1] if test_output.strip() else ""
+    if test_code == 0 and "passed" in last_line:
+        sys.stdout.write(f"  OK — {last_line.strip()}\n")
+    else:
+        issues.append(f"test failure: {last_line}")
+        sys.stdout.write(f"  FAIL — {last_line}\n")
+
+    # 6. Stats summary from real session data
+    sys.stdout.write("[6/6] real session stats summary\n")
+    try:
+        cfg3 = load_config()
+        s = cfg3.get("session_stats", {})
+        total = s.get("total_calls", 0)
+        cost = s.get("estimated_cost_usd", 0.0)
+        baseline = s.get("baseline_opus_xhigh_cost_usd", 0.0)
+        saved = baseline - cost if baseline > cost else 0.0
+        pct = (100 * saved / baseline) if baseline > 0 else 0.0
+        sys.stdout.write(f"  total calls: {total}\n")
+        sys.stdout.write(f"  cost actual:    ${cost:.4f}\n")
+        sys.stdout.write(f"  cost baseline:  ${baseline:.4f}\n")
+        sys.stdout.write(f"  saved:          ${saved:.4f} ({pct:.1f}%)\n")
+    except Exception as e:
+        issues.append(f"stats summary failed: {e}")
+        sys.stdout.write(f"  FAIL — {e}\n")
+
+    sys.stdout.write("\n" + "=" * 50 + "\n")
+    if issues:
+        sys.stdout.write(f"  HEALTH: DEGRADED — {len(issues)} issue(s)\n")
+        for i in issues:
+            sys.stdout.write(f"    - {i}\n")
+        return 1
+    sys.stdout.write("  HEALTH: GREEN — all checks passed\n")
+    return 0
+
+
 def main() -> None:
     try:
         if "--update-models" in sys.argv:
@@ -1757,6 +1868,8 @@ def main() -> None:
             return
         if "--lint-skill" in sys.argv:
             sys.exit(lint_skill())
+        if "--health-check" in sys.argv:
+            sys.exit(health_check())
         try:
             is_tty = sys.stdin.isatty()
         except (OSError, ValueError):
