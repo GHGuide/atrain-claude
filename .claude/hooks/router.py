@@ -6,10 +6,12 @@ Atomic file writes via .tmp + os.replace. Hook latency target <50ms.
 """
 import contextlib
 import fcntl
+import hashlib
 import io
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -295,6 +297,155 @@ def load_config() -> dict:
 
 def save_config(config: dict) -> None:
     atomic_write_json(CONFIG_PATH, config)
+
+
+# ─── Tool-result cache (Pattern 4 lite) ─────────────────────────────
+# stdlib-only sqlite3 cache. Detects duplicate Read/LS/Glob/Grep
+# within a short window and surfaces the previous result as an
+# advisory so Claude can skip the redundant call.
+CACHEABLE_TOOLS = ("Read", "LS", "Glob", "Grep")
+CACHE_TTL_SEC = 30
+CACHE_MAX_AGE_SEC = 3600  # housekeeping prune horizon
+
+
+def _cache_db_path() -> Path:
+    return CONFIG_PATH.parent / "router-cache.sqlite"
+
+
+def _cache_conn():
+    p = _cache_db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), timeout=2.0, isolation_level=None)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tool_cache ("
+        "key TEXT PRIMARY KEY, tool TEXT, input_json TEXT, "
+        "output TEXT, ts REAL, session_id TEXT, hits INTEGER DEFAULT 0)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cache_stats ("
+        "session_id TEXT, hits INTEGER, misses INTEGER, "
+        "PRIMARY KEY(session_id))"
+    )
+    return conn
+
+
+def _cache_key(tool_name: str, tool_input) -> str:
+    try:
+        ti_json = json.dumps(tool_input, sort_keys=True)
+    except (TypeError, ValueError):
+        ti_json = str(tool_input)
+    blob = f"{tool_name}::{ti_json}".encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def cache_get(tool_name: str, tool_input, max_age_sec: int = CACHE_TTL_SEC):
+    """Return cached row dict if hit within TTL, else None."""
+    if tool_name not in CACHEABLE_TOOLS:
+        return None
+    try:
+        conn = _cache_conn()
+        try:
+            row = conn.execute(
+                "SELECT output, ts, hits FROM tool_cache WHERE key=?",
+                (_cache_key(tool_name, tool_input),),
+            ).fetchone()
+            if not row:
+                return None
+            output, ts, hits = row
+            age = time.time() - ts
+            if age > max_age_sec:
+                return None
+            conn.execute(
+                "UPDATE tool_cache SET hits=hits+1 WHERE key=?",
+                (_cache_key(tool_name, tool_input),),
+            )
+            return {"output": output, "age_sec": age, "hits": hits + 1}
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return None
+
+
+def cache_put(tool_name: str, tool_input, output: str, session_id: str = "") -> None:
+    """Store tool output if tool is cacheable. Failures are silent."""
+    if tool_name not in CACHEABLE_TOOLS:
+        return
+    if not output or len(output) > 200_000:
+        # Skip empty + huge outputs (latter are usually streaming logs)
+        return
+    try:
+        conn = _cache_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO tool_cache "
+                "(key, tool, input_json, output, ts, session_id, hits) "
+                "VALUES (?, ?, ?, ?, ?, ?, "
+                "COALESCE((SELECT hits FROM tool_cache WHERE key=?), 0))",
+                (
+                    _cache_key(tool_name, tool_input), tool_name,
+                    json.dumps(tool_input, sort_keys=True)[:8000],
+                    output, time.time(), session_id,
+                    _cache_key(tool_name, tool_input),
+                ),
+            )
+            # Periodic housekeeping: prune entries older than 1h
+            if hash(_cache_key(tool_name, tool_input)) % 64 == 0:
+                conn.execute(
+                    "DELETE FROM tool_cache WHERE ts < ?",
+                    (time.time() - CACHE_MAX_AGE_SEC,),
+                )
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        pass
+
+
+def cache_record_stat(session_id: str, hit: bool) -> None:
+    try:
+        conn = _cache_conn()
+        try:
+            field = "hits" if hit else "misses"
+            other = "misses" if hit else "hits"
+            conn.execute(
+                f"INSERT INTO cache_stats (session_id, {field}, {other}) "
+                "VALUES (?, 1, 0) "
+                f"ON CONFLICT(session_id) DO UPDATE SET {field}={field}+1",
+                (session_id,),
+            )
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        pass
+
+
+def cache_stats_summary() -> dict:
+    try:
+        conn = _cache_conn()
+        try:
+            total_rows = conn.execute(
+                "SELECT COUNT(*) FROM tool_cache"
+            ).fetchone()[0]
+            total_hits = conn.execute(
+                "SELECT COALESCE(SUM(hits), 0) FROM tool_cache"
+            ).fetchone()[0]
+            agg = conn.execute(
+                "SELECT COALESCE(SUM(hits), 0), COALESCE(SUM(misses), 0) "
+                "FROM cache_stats"
+            ).fetchone()
+            sess_hits, sess_misses = agg if agg else (0, 0)
+            total_q = sess_hits + sess_misses
+            hit_rate = (sess_hits / total_q) if total_q else 0.0
+            return {
+                "rows": total_rows,
+                "row_hits_total": total_hits,
+                "session_hits": sess_hits,
+                "session_misses": sess_misses,
+                "hit_rate": hit_rate,
+            }
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        return {"error": str(e)}
 
 
 def session_temp_path(session_id: str) -> Path:
@@ -910,6 +1061,21 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     if tool_name == "Task":
         return handle_task_dispatch(data)
 
+    # Pattern 4 lite: detect duplicate cacheable tool calls within TTL
+    cache_advisory = ""
+    if tool_name in CACHEABLE_TOOLS:
+        hit = cache_get(tool_name, tool_input)
+        cache_record_stat(session_id, bool(hit))
+        if hit:
+            excerpt = hit["output"][:300].replace("\n", " ")
+            cache_advisory = (
+                f"smart-router: duplicate {tool_name} detected — same "
+                f"input was called {int(hit['age_sec'])}s ago and returned "
+                f"~{len(hit['output'])} chars. Output excerpt: '{excerpt}…'. "
+                f"Skip re-running this if the underlying file/state hasn't "
+                f"changed."
+            )
+
     cls = classify_task(tool_name, tool_input, config)
     model_alias = cls["model_alias"]
     effort = cls["effort"]
@@ -963,6 +1129,8 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         f"smart-router: {model_alias}{effort_text} "
         f"({full_id}) — {reason} | conf={confidence:.2f}"
     )
+    if cache_advisory:
+        advice = advice + "\n\n" + cache_advisory
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -1088,6 +1256,13 @@ def _handle_post_tool_use_inner(data: dict) -> None:
         "ts": datetime.now().isoformat(),
     })
     save_session_log(session_id, log)
+
+    # Pattern 4 lite: cache successful cacheable tool outputs.
+    # PostToolUse data mirrors tool_input from the dispatch; reuse it
+    # directly so cache key matches the PreToolUse lookup.
+    if not had_error and tool_name in CACHEABLE_TOOLS:
+        cache_input = data.get("tool_input", {}) or {}
+        cache_put(tool_name, cache_input, out_str, session_id=session_id)
 
     if had_error:
         stats["escalations_error_recovery"] = stats.get("escalations_error_recovery", 0) + 1
@@ -1664,6 +1839,44 @@ def run_tests() -> None:
                "distill" in ctx.lower() and "400" in ctx,
                f"ctx={ctx[:160]!r}")
 
+        # T30: cache miss returns None
+        atomic_write_json(CONFIG_PATH, _default_config())
+        # Force fresh cache db in temp dir
+        cache_db = CONFIG_PATH.parent / "router-cache.sqlite"
+        if cache_db.exists():
+            cache_db.unlink()
+        miss = cache_get("Read", {"path": "fresh.ts"})
+        record("T30", miss is None, f"miss={miss}")
+
+        # T31: cache put then get returns hit with output
+        cache_put("Read", {"path": "cached.ts"},
+                  "file content here", session_id="t31")
+        hit = cache_get("Read", {"path": "cached.ts"})
+        record("T31",
+               hit is not None and hit.get("output") == "file content here"
+               and hit.get("age_sec", 999) < 5,
+               f"hit={hit}")
+
+        # T32: non-cacheable tool returns None even with same path
+        cache_put("Bash", {"command": "echo x"}, "x", session_id="t32")
+        bash_hit = cache_get("Bash", {"command": "echo x"})
+        record("T32", bash_hit is None, f"bash_hit={bash_hit}")
+
+        # T33: PreToolUse on duplicate Read injects cache advisory
+        save_session_log("t33", [])
+        cache_put("Read", {"path": "/etc/hosts"},
+                  "127.0.0.1 localhost", session_id="t33")
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"path": "/etc/hosts"},
+            "session_id": "t33",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T33",
+               "duplicate" in ctx.lower() and "127.0.0.1" in ctx,
+               f"ctx={ctx[:200]!r}")
+
     CONFIG_PATH = saved_config_path
 
     passed = sum(1 for _, s, _ in results if s == "PASS")
@@ -1870,6 +2083,15 @@ def main() -> None:
             sys.exit(lint_skill())
         if "--health-check" in sys.argv:
             sys.exit(health_check())
+        if "--cache-stats" in sys.argv:
+            stats = cache_stats_summary()
+            sys.stdout.write("=== smart-router cache stats ===\n")
+            for k, v in stats.items():
+                if isinstance(v, float):
+                    sys.stdout.write(f"  {k}: {v:.3f}\n")
+                else:
+                    sys.stdout.write(f"  {k}: {v}\n")
+            return
         try:
             is_tty = sys.stdin.isatty()
         except (OSError, ValueError):
