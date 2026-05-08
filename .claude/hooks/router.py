@@ -164,6 +164,7 @@ def _default_config() -> dict:
         "decompose_enabled": False,
         "force_subagent_recon": False,
         "bash_pre_rewrite_enabled": True,
+        "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
                 "recon": "recon-haiku",
@@ -1634,17 +1635,56 @@ def handle_user_prompt_submit(data: dict) -> None:
     is_multi, signals = detect_multi_faceted(prompt)
 
     parts = []
-    # v6.0 — Layer 1 terse output (caveman pattern, native).
-    # Eco mode injects style guidance that survives across the whole turn.
-    # Saves ~50-65% on text output. Code/commits/security write normal.
-    if mode == "eco":
-        parts.append(
-            "ATrain (eco) terse output mode: drop articles (a/an/the), "
-            "filler (just/really/basically), pleasantries, hedging. "
-            "Fragments OK. Short synonyms (big not extensive, fix not "
-            "implement). Code blocks, commit messages, and "
-            "security warnings: write normal — never compress those."
+    # v6.5 — full caveman pattern injection (ported from JuliusBrussee/caveman).
+    # Eco mode triggers FULL intensity; user can override via
+    # config.caveman_intensity (lite|full|ultra). Real measured 65-75%
+    # output reduction (median 65%, range 22-87% across 10 tasks per
+    # caveman repo's three-arm eval harness).
+    intensity = config.get("caveman_intensity")
+    if intensity is None and mode == "eco":
+        intensity = "full"
+    if intensity in ("lite", "full", "ultra"):
+        rules = (
+            "ATrain caveman mode ACTIVE — terse output, every response.\n\n"
+            "PERSISTENCE\n"
+            "  Active every response in this conversation. No revert after\n"
+            "  many turns. No filler drift. Still active if unsure.\n\n"
+            "RULES\n"
+            "  Drop: articles (a/an/the), filler (just/really/basically/\n"
+            "  actually/simply), pleasantries (sure/certainly/of course/\n"
+            "  happy to), hedging.\n"
+            "  Fragments OK. Short synonyms (big not extensive, fix not\n"
+            "  'implement a solution for'). Technical terms exact.\n"
+            "  Code blocks unchanged. Errors quoted exact.\n\n"
+            "PATTERN\n"
+            "  '[thing] [action] [reason]. [next step].'\n"
+            "  Not: 'Sure! I'd be happy to help. The issue you're\n"
+            "       experiencing is likely caused by...'\n"
+            "  Yes: 'Bug in auth middleware. Token expiry use `<` not\n"
+            "       `<=`. Fix:'\n\n"
         )
+        if intensity == "ultra":
+            rules += (
+                "ULTRA EXTRA\n"
+                "  Abbreviate (DB/auth/config/req/res/fn/impl), strip\n"
+                "  conjunctions, arrows for causality (X → Y), one word\n"
+                "  when one word enough.\n\n"
+            )
+        elif intensity == "lite":
+            rules = rules.replace(
+                "Fragments OK.",
+                "Keep grammar + full sentences. Professional but tight.",
+            )
+        rules += (
+            "AUTO-CLARITY (drop caveman, resume after)\n"
+            "  - Security warnings\n"
+            "  - Irreversible action confirmations (delete/drop/migrate)\n"
+            "  - Multi-step sequences where fragment order risks misread\n"
+            "  - User asks to clarify or repeats question\n\n"
+            "BOUNDARIES\n"
+            "  Code/commits/PRs/security: write NORMAL. Never compress."
+        )
+        parts.append(rules)
 
     # v6.3 — MoA-Lite advisory (Mixture-of-Agents pattern).
     # Quality mode + complex high-stakes prompt → suggest /atrain-moa
@@ -3053,6 +3093,60 @@ def run_tests() -> None:
                "-q" in new_cmd
                and "rewrote bash command" in ctx,
                f"updated_cmd={new_cmd!r}, ctx_excerpt={ctx[:200]!r}")
+
+        # T51 v6.5 caveman intensity full integration
+        # eco mode auto-fires "full" — should include persistence, rules,
+        # pattern, auto-clarity, boundaries sections
+        eco_cfg = _default_config()
+        eco_cfg["mode"] = "eco"
+        atomic_write_json(CONFIG_PATH, eco_cfg)
+        save_session_log("t51_eco", [])
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t51_eco",
+            "prompt": "build a small helper",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        eco_full_caveman = (
+            "caveman mode ACTIVE" in ctx
+            and "PERSISTENCE" in ctx
+            and "RULES" in ctx
+            and "PATTERN" in ctx
+            and "AUTO-CLARITY" in ctx
+            and "BOUNDARIES" in ctx
+        )
+
+        # ultra intensity adds the ULTRA EXTRA section
+        ultra_cfg = _default_config()
+        ultra_cfg["caveman_intensity"] = "ultra"
+        atomic_write_json(CONFIG_PATH, ultra_cfg)
+        save_session_log("t51_ultra", [])
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t51_ultra",
+            "prompt": "build a small helper",
+        })
+        ctx_ultra = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        ultra_active = "ULTRA EXTRA" in ctx_ultra and "Abbreviate" in ctx_ultra
+
+        # off intensity (None) and balanced mode → no caveman injection
+        off_cfg = _default_config()
+        off_cfg["mode"] = "balanced"
+        off_cfg["caveman_intensity"] = None
+        atomic_write_json(CONFIG_PATH, off_cfg)
+        save_session_log("t51_off", [])
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t51_off",
+            "prompt": "build a small helper",
+        })
+        ctx_off = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        no_caveman = "caveman mode" not in ctx_off.lower()
+
+        record("T51",
+               eco_full_caveman and ultra_active and no_caveman,
+               f"eco_full={eco_full_caveman}, ultra={ultra_active}, "
+               f"off_clean={no_caveman}")
 
     CONFIG_PATH = saved_config_path
 
