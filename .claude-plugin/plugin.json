@@ -1,6 +1,6 @@
 {
   "name": "atrain-claude",
-  "version": "6.2.0",
+  "version": "6.3.0",
   "description": "ATrain Claude — fast, relevant subagent fan-out for Claude Code. Pick a mode (eco / balanced / quality) per conversation; ATrain orchestrates Haiku/Sonnet/Opus subagents in parallel via the Task tool so routine work runs cheap and security work stays on Opus. Bundled-token aware. Honest accounting. Three slash commands plus on/off toggle.",
   "author": {
     "name": "Metrcih"

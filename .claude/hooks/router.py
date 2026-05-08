@@ -1154,10 +1154,31 @@ def compute_output_confidence(out_str: str, tool_name: str,
 
 
 def confidence_threshold(config: dict) -> float:
-    """Per-preset acceptance threshold for output confidence."""
+    """Per-preset acceptance threshold for output confidence.
+    v6.3: quality mode threshold raised to 0.95 — quality preset
+    should escalate weak outputs more aggressively, not less."""
     mode = config.get("mode", "balanced")
     return {"eco": 0.55, "balanced": 0.75,
-            "quality": 0.92, "precise": 0.95}.get(mode, 0.75)
+            "quality": 0.95, "precise": 0.97}.get(mode, 0.75)
+
+
+def quality_moa_recommended(config: dict, prompt_text: str) -> bool:
+    """v6.3 MoA-Lite trigger. In quality mode, when prompt is complex
+    AND high-stakes (touches multiple decision dimensions), recommend
+    /atrain-moa for parallel multi-perspective dispatch."""
+    if config.get("mode") != "quality":
+        return False
+    if not prompt_text or len(prompt_text) < 80:
+        return False
+    text = prompt_text.lower()
+    # High-stakes signals — these pair well with MoA's perspective fanout
+    stakes_kw = (
+        "production", "ship", "deploy", "critical", "review all",
+        "refactor entire", "architecture", "design pattern",
+        "tradeoff", "trade-off", "choose between", "which approach",
+        "best practice", "should i", "what's the best",
+    )
+    return any(k in text for k in stakes_kw)
 
 
 def classify_task(tool_name: str, tool_input, config: dict) -> dict:
@@ -1544,6 +1565,19 @@ def handle_user_prompt_submit(data: dict) -> None:
             "Fragments OK. Short synonyms (big not extensive, fix not "
             "implement). Code blocks, commit messages, and "
             "security warnings: write normal — never compress those."
+        )
+
+    # v6.3 — MoA-Lite advisory (Mixture-of-Agents pattern).
+    # Quality mode + complex high-stakes prompt → suggest /atrain-moa
+    # for parallel multi-perspective dispatch with a synthesis pass.
+    if quality_moa_recommended(config, prompt):
+        parts.append(
+            "ATrain (quality + high-stakes detected): consider "
+            "/atrain-moa for this task — dispatches 2-3 architect-opus "
+            "subagents in parallel with varied framings, then "
+            "synthesizes. Per Wang et al. 2024, MoA-Lite beats "
+            "single-Opus on multi-perspective tasks at the cost of "
+            "2-3× a single dispatch. Worth it for production decisions."
         )
     if is_first:
         parts.append(
@@ -2850,6 +2884,37 @@ def run_tests() -> None:
         record("T46",
                "ATrain index" in ctx and "MyButton" in ctx
                and ("ui.tsx:1" in ctx or "ui.tsx" in ctx),
+               f"ctx_excerpt={ctx[:240]!r}")
+
+        # T47 v6.3 MoA-Lite advisory in quality mode + high-stakes prompt
+        quality_cfg = _default_config()
+        quality_cfg["mode"] = "quality"
+        atomic_write_json(CONFIG_PATH, quality_cfg)
+        save_session_log("t47", [])
+        # high-stakes prompt: contains "production" + complex framing
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t47",
+            "prompt": ("we need to choose between event-driven and "
+                       "polling architecture for the production "
+                       "deployment of the new analytics service. "
+                       "what's the best tradeoff for our scale?"),
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T47",
+               "/atrain-moa" in ctx and "high-stakes" in ctx.lower(),
+               f"ctx_excerpt={ctx[:240]!r}")
+
+        # T48: simple quality-mode prompt should NOT trigger MoA
+        save_session_log("t48", [])
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t48",
+            "prompt": "find foo() in src",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T48",
+               "/atrain-moa" not in ctx,
                f"ctx_excerpt={ctx[:240]!r}")
 
     CONFIG_PATH = saved_config_path
