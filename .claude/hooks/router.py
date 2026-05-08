@@ -161,6 +161,7 @@ def _default_config() -> dict:
         ],
         "agent_registry": dict(AGENT_REGISTRY),
         "decompose_enabled": False,
+        "force_subagent_recon": False,
         "routing_tables": {
             "eco": {
                 "recon": "recon-haiku",
@@ -331,7 +332,73 @@ def _cache_conn():
         "session_id TEXT, hits INTEGER, misses INTEGER, "
         "PRIMARY KEY(session_id))"
     )
+    # v5.0 — Negative-Cache Short-Circuit (Pattern 10).
+    # Track (prompt_fingerprint, alias) tuples that failed (output_verify
+    # escalation, error_recovery, etc.). Skip them next time the
+    # classifier would pick the same route. Effort intentionally NOT
+    # part of key — once a route at any effort failed, upshift the tier.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS route_failures ("
+        "fingerprint TEXT, alias TEXT, "
+        "failure_kind TEXT, ts REAL, "
+        "PRIMARY KEY(fingerprint, alias))"
+    )
     return conn
+
+
+def _route_fingerprint(text: str) -> str:
+    """Stable 8-byte fingerprint of prompt prefix. blake2b is stdlib."""
+    if not text:
+        return ""
+    return hashlib.blake2b(
+        text[:512].encode("utf-8", errors="ignore"),
+        digest_size=8
+    ).hexdigest()
+
+
+def cache_record_route_failure(text: str, alias: str,
+                               failure_kind: str = "unknown") -> None:
+    """Record that (fingerprint, alias) produced a bad result."""
+    fp = _route_fingerprint(text)
+    if not fp:
+        return
+    try:
+        conn = _cache_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO route_failures "
+                "(fingerprint, alias, failure_kind, ts) "
+                "VALUES (?, ?, ?, ?)",
+                (fp, alias, failure_kind, time.time()),
+            )
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        pass
+
+
+def cache_check_route_failure(text: str, alias: str,
+                              max_age_sec: int = 24 * 3600) -> bool:
+    """Returns True if this (fingerprint, alias) failed recently.
+    Caller should skip directly to a higher tier."""
+    fp = _route_fingerprint(text)
+    if not fp:
+        return False
+    try:
+        conn = _cache_conn()
+        try:
+            row = conn.execute(
+                "SELECT ts FROM route_failures "
+                "WHERE fingerprint=? AND alias=?",
+                (fp, alias),
+            ).fetchone()
+            if not row:
+                return False
+            return (time.time() - row[0]) < max_age_sec
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return False
 
 
 def _cache_key(tool_name: str, tool_input) -> str:
@@ -841,14 +908,31 @@ def classify_to_agent(full_text: str, config: dict) -> str:
     routing_tables[mode][tier] so eco/balanced/quality biases actually
     take effect on Task dispatches (not just per-tool-call routing).
 
+    v5.0: also consults route_failures negative-cache. If the chosen
+    agent failed on a similar prompt within the last 24h, the helper
+    upshifts to the next tier automatically.
+
     Keyword sets are tuned against tools/evals/router_eval.json — change
     them in tandem with that corpus and re-run run_eval.py."""
     text = full_text.lower()
     mode = config.get("mode", "balanced")
     table = config.get("routing_tables", {}).get(mode, {})
 
+    UPSHIFT = {
+        "recon-haiku": "impl-sonnet",
+        "impl-sonnet": "api-sonnet",
+        "api-sonnet": "architect-opus",
+        "architect-opus": "secure-opus",
+        "secure-opus": "secure-opus",
+    }
+
     def via_table(tier: str, fallback: str) -> str:
-        return table.get(tier, fallback)
+        agent = table.get(tier, fallback)
+        # v5.0 negative-cache check: if we know this route failed recently
+        # for a similar prompt, upshift one tier.
+        if cache_check_route_failure(text, agent):
+            return UPSHIFT.get(agent, agent)
+        return agent
 
     sensitive_phrases = (
         "api key", "database migration", "rotate the api",
@@ -1086,6 +1170,34 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
 
     if tool_name == "Task":
         return handle_task_dispatch(data)
+
+    # v5.0 — aggressive Task forcing in eco mode for cacheable tools.
+    # Hook returns permissionDecision: ask with a clear suggestion to
+    # use Task dispatch instead. User can approve to bypass. Pushes
+    # eco mode toward its real -70% savings target by making subagent
+    # dispatch the path of least resistance.
+    mode = config.get("mode", "balanced")
+    if (mode == "eco"
+            and tool_name in CACHEABLE_TOOLS
+            and config.get("force_subagent_recon", False)):
+        suggested_agent = (
+            config.get("routing_tables", {})
+            .get("eco", {}).get("recon", "recon-haiku")
+        )
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": (
+                    f"ATrain (eco): {tool_name} is recon-class. "
+                    f"Spawn Task(subagent_type='{suggested_agent}', "
+                    f"prompt='...') instead — runs on Haiku at "
+                    f"~80% bundled-token discount. Approve to run "
+                    f"on parent session anyway."
+                ),
+            }
+        }))
+        return
 
     # Pattern 4 lite: detect duplicate cacheable tool calls within TTL
     cache_advisory = ""
@@ -1328,9 +1440,30 @@ def _handle_post_tool_use_inner(data: dict) -> None:
     if had_error:
         stats["escalations_error_recovery"] = stats.get("escalations_error_recovery", 0) + 1
         stats["escalations_total"] = stats.get("escalations_total", 0) + 1
+        # v5.0 negative-cache: record this route failed for the prompt
+        prompt_text = ""
+        if isinstance(data.get("tool_input"), dict):
+            prompt_text = (
+                str(data["tool_input"].get("prompt", ""))
+                + " " + str(data["tool_input"].get("description", ""))
+            )
+        if prompt_text and alias:
+            cache_record_route_failure(
+                prompt_text, alias, "error_recovery"
+            )
     if verify_resp and not verify_resp.get("verified"):
         stats["escalations_output_verify"] = stats.get("escalations_output_verify", 0) + 1
         stats["escalations_total"] = stats.get("escalations_total", 0) + 1
+        prompt_text = ""
+        if isinstance(data.get("tool_input"), dict):
+            prompt_text = (
+                str(data["tool_input"].get("prompt", ""))
+                + " " + str(data["tool_input"].get("description", ""))
+            )
+        if prompt_text and alias:
+            cache_record_route_failure(
+                prompt_text, alias, "output_verify"
+            )
 
     save_config(config)
 
@@ -2010,6 +2143,56 @@ def run_tests() -> None:
                and "task(" in ctx.lower()
                and "recon-haiku" in ctx,
                f"ctx_excerpt={ctx[:240]!r}")
+
+        # T37 v5.0 negative-cache: record + check route failure
+        atomic_write_json(CONFIG_PATH, _default_config())
+        # ensure clean cache db for this test
+        cache_db = CONFIG_PATH.parent / "router-cache.sqlite"
+        if cache_db.exists():
+            cache_db.unlink()
+        prompt = "find usages of foo() helper"
+        cache_record_route_failure(prompt, "recon-haiku", "output_verify")
+        had_failure = cache_check_route_failure(prompt, "recon-haiku")
+        no_failure_for_other = cache_check_route_failure(
+            "totally different unrelated prompt about pizza", "recon-haiku"
+        )
+        record("T37",
+               had_failure and not no_failure_for_other,
+               f"failure_recorded={had_failure}, "
+               f"unrelated={no_failure_for_other}")
+
+        # T38 v5.0 classify_to_agent upshifts when route_failures matches
+        cache_record_route_failure(
+            "find todos in src", "recon-haiku", "output_verify"
+        )
+        balanced_cfg = _default_config()
+        balanced_cfg["mode"] = "balanced"
+        agent = classify_to_agent("find todos in src", balanced_cfg)
+        record("T38",
+               agent == "impl-sonnet",
+               f"got {agent}, expected impl-sonnet (upshifted from "
+               f"recon-haiku due to negative cache)")
+
+        # T39 v5.0 eco + force_subagent_recon: hook returns permissionDecision
+        # 'ask' on Read with Task spawn suggestion
+        eco_force = _default_config()
+        eco_force["mode"] = "eco"
+        eco_force["force_subagent_recon"] = True
+        atomic_write_json(CONFIG_PATH, eco_force)
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"path": "src/index.ts"},
+            "session_id": "t39",
+        })
+        h = out.get("hookSpecificOutput", {}) or {}
+        decision = h.get("permissionDecision", "")
+        reason = (h.get("permissionDecisionReason", "") or "").lower()
+        record("T39",
+               decision == "ask"
+               and ("task(" in reason or "subagent_type" in reason)
+               and "recon-haiku" in reason,
+               f"decision={decision}, reason={reason[:160]!r}")
 
     CONFIG_PATH = saved_config_path
 
