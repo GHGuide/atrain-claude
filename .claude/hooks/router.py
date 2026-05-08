@@ -4,6 +4,7 @@
 Stdlib only. Never crashes — wraps everything and returns {} on error.
 Atomic file writes via .tmp + os.replace. Hook latency target <50ms.
 """
+import ast
 import contextlib
 import fcntl
 import hashlib
@@ -504,6 +505,219 @@ def load_session_memory_for_inject() -> str:
         return text
     except (OSError, ValueError):
         return ""
+
+
+# ─── Codebase indexer (v6.2 native, graphify pattern, stdlib-only) ──
+# Walks a project, extracts symbol locations (functions, classes,
+# exports), stores in per-project sqlite. PreToolUse hook on
+# Read/Grep can answer "where is X defined" in <10ms instead of
+# many file reads. Supports Python via ast, JS/TS/Go via regex.
+INDEX_DIR_NAME = "atrain-index"
+INDEX_MAX_FILE_BYTES = 200_000   # skip huge files
+INDEX_MAX_FILES = 5_000
+INDEX_SUPPORTED_EXTS = (".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs")
+
+# Skip patterns for typical irrelevant directories
+INDEX_SKIP_DIR_NAMES = {
+    "node_modules", ".git", ".venv", "venv", "__pycache__",
+    ".pytest_cache", ".mypy_cache", "dist", "build", ".next",
+    "target", ".cache", "vendor", "coverage", ".idea", ".vscode",
+}
+
+
+def _index_db_path() -> Path:
+    return CONFIG_PATH.parent / INDEX_DIR_NAME / f"{_project_hash()}.sqlite"
+
+
+def _index_conn():
+    p = _index_db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), timeout=2.0, isolation_level=None)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS symbols ("
+        "path TEXT, name TEXT, kind TEXT, signature TEXT, "
+        "line INTEGER, indexed_at REAL)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path)")
+    return conn
+
+
+def _index_python_file(path: Path) -> list:
+    """Extract symbols from a Python file via stdlib ast."""
+    try:
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        if len(src) > INDEX_MAX_FILE_BYTES:
+            return []
+        tree = ast.parse(src, filename=str(path))
+    except (OSError, SyntaxError, ValueError):
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = [a.arg for a in node.args.args]
+            sig = f"def {node.name}({', '.join(args)})"
+            out.append(("function", node.name, sig, node.lineno))
+        elif isinstance(node, ast.ClassDef):
+            out.append(("class", node.name, f"class {node.name}",
+                        node.lineno))
+    return out
+
+
+# Regex for JS/TS function and class symbol extraction
+_JS_RE = re.compile(
+    r"^\s*(?:export\s+)?(?:async\s+)?"
+    r"(?:function\s+(\w+)|"
+    r"class\s+(\w+)|"
+    r"const\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>)",
+    re.MULTILINE,
+)
+
+_GO_RE = re.compile(
+    r"^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(",
+    re.MULTILINE,
+)
+
+_RS_RE = re.compile(
+    r"^(?:pub\s+)?fn\s+(\w+)",
+    re.MULTILINE,
+)
+
+
+def _index_regex_file(path: Path, ext: str) -> list:
+    """Extract symbols from JS/TS/Go/Rust via regex (stdlib re)."""
+    try:
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        if len(src) > INDEX_MAX_FILE_BYTES:
+            return []
+    except OSError:
+        return []
+    out = []
+    if ext in (".js", ".jsx", ".ts", ".tsx"):
+        for m in _JS_RE.finditer(src):
+            name = m.group(1) or m.group(2) or m.group(3)
+            if not name:
+                continue
+            kind = ("class" if m.group(2)
+                    else ("function" if m.group(1) else "arrow"))
+            line = src[:m.start()].count("\n") + 1
+            sig = m.group(0).strip()[:120]
+            out.append((kind, name, sig, line))
+    elif ext == ".go":
+        for m in _GO_RE.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            sig = m.group(0).strip()[:120]
+            out.append(("function", m.group(1), sig, line))
+    elif ext == ".rs":
+        for m in _RS_RE.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            sig = m.group(0).strip()[:120]
+            out.append(("function", m.group(1), sig, line))
+    return out
+
+
+def index_project(root: str = None) -> dict:
+    """Walk project, index all supported files. Returns summary dict."""
+    root_path = Path(root or os.getcwd()).resolve()
+    if not root_path.is_dir():
+        return {"error": f"not a directory: {root_path}"}
+    n_files = 0
+    n_symbols = 0
+    skipped = 0
+    try:
+        conn = _index_conn()
+        try:
+            conn.execute("DELETE FROM symbols")
+            now = time.time()
+            for p in root_path.rglob("*"):
+                if n_files >= INDEX_MAX_FILES:
+                    break
+                if any(part in INDEX_SKIP_DIR_NAMES for part in p.parts):
+                    continue
+                if not p.is_file():
+                    continue
+                ext = p.suffix.lower()
+                if ext not in INDEX_SUPPORTED_EXTS:
+                    continue
+                try:
+                    if p.stat().st_size > INDEX_MAX_FILE_BYTES:
+                        skipped += 1
+                        continue
+                except OSError:
+                    skipped += 1
+                    continue
+                rel = str(p.relative_to(root_path))
+                if ext == ".py":
+                    syms = _index_python_file(p)
+                else:
+                    syms = _index_regex_file(p, ext)
+                if not syms:
+                    continue
+                n_files += 1
+                for kind, name, sig, line in syms:
+                    conn.execute(
+                        "INSERT INTO symbols "
+                        "(path, name, kind, signature, line, indexed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (rel, name, kind, sig, line, now),
+                    )
+                    n_symbols += 1
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        return {"error": str(e)}
+    return {
+        "project": str(root_path),
+        "n_files_indexed": n_files,
+        "n_symbols": n_symbols,
+        "skipped_oversize": skipped,
+    }
+
+
+def lookup_symbol(name: str, limit: int = 5) -> list:
+    """Query the index for a symbol name. Returns list of dicts."""
+    if not name or len(name) < 2:
+        return []
+    try:
+        conn = _index_conn()
+        try:
+            rows = conn.execute(
+                "SELECT path, name, kind, signature, line FROM symbols "
+                "WHERE name = ? OR name LIKE ? LIMIT ?",
+                (name, f"%{name}%", limit),
+            ).fetchall()
+            return [
+                {"path": r[0], "name": r[1], "kind": r[2],
+                 "signature": r[3], "line": r[4]}
+                for r in rows
+            ]
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return []
+
+
+def index_status() -> dict:
+    """Quick stats on the project's index."""
+    try:
+        conn = _index_conn()
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            by_kind = dict(conn.execute(
+                "SELECT kind, COUNT(*) FROM symbols GROUP BY kind"
+            ).fetchall())
+            files = conn.execute(
+                "SELECT COUNT(DISTINCT path) FROM symbols"
+            ).fetchone()[0]
+            return {
+                "indexed_symbols": total,
+                "indexed_files": files,
+                "by_kind": by_kind,
+            }
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return {"error": "index not built"}
 
 
 # ─── Tool-result cache (Pattern 4 lite) ─────────────────────────────
@@ -1496,6 +1710,25 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         f"{effort_text} ({reason} | conf={confidence:.2f})."
     )
 
+    # v6.2 — Layer 4 codebase index lookup (graphify pattern, native).
+    # When user does Grep for what looks like a symbol name AND the
+    # project index has been built, surface the symbol's location as an
+    # advisory. Claude can choose to skip the grep entirely.
+    index_advisory = ""
+    if tool_name == "Grep" and isinstance(tool_input, dict):
+        pat = str(tool_input.get("pattern", "")).strip()
+        # Heuristic: short, identifier-shaped → likely a symbol name
+        if pat and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", pat) and 2 < len(pat) < 60:
+            hits = lookup_symbol(pat, limit=5)
+            if hits:
+                lines = [f"ATrain index: '{pat}' found in pre-built index:"]
+                for h in hits[:5]:
+                    lines.append(f"  • {h['path']}:{h['line']}  "
+                                 f"{h['kind']}  {h['signature'][:80]}")
+                lines.append("Skip the Grep if you only needed locations — "
+                             "the index is fresh as of last /atrain-index.")
+                index_advisory = "\n".join(lines)
+
     # v6.0 — Layer 2 tool-input compaction (claw-compactor pattern).
     # When tool_input has huge content/old_string/new_string fields,
     # rewrite via updatedInput so the parent session sees a truncated
@@ -1516,6 +1749,8 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         )
     if cache_advisory:
         advice = advice + "\n\n" + cache_advisory
+    if index_advisory:
+        advice = advice + "\n\n" + index_advisory
     hso = {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",
@@ -2552,6 +2787,71 @@ def run_tests() -> None:
                and "calls" in ctx,
                f"ctx_excerpt={ctx[:240]!r}")
 
+        # T45 v6.2 codebase indexer — index a temp dir with sample files
+        with tempfile.TemporaryDirectory() as proj_td:
+            proj_path = Path(proj_td)
+            (proj_path / "module_a.py").write_text(
+                "def hello_world():\n    return 'hi'\n\n"
+                "class FooHandler:\n    pass\n\n"
+                "def parse_config(path):\n    pass\n"
+            )
+            (proj_path / "ui.tsx").write_text(
+                "export function MyButton(props) { return null; }\n"
+                "class Widget {}\n"
+                "const handleClick = (e) => console.log(e);\n"
+            )
+            (proj_path / "main.go").write_text(
+                "package main\n\nfunc Main() {}\n\n"
+                "func processRequest(r *Request) error { return nil }\n"
+            )
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(proj_td)
+                result = index_project()
+                # lookups must run in same cwd — _project_hash uses cwd
+                hits_hello = lookup_symbol("hello_world")
+                hits_button = lookup_symbol("MyButton")
+                hits_main = lookup_symbol("Main")
+            finally:
+                os.chdir(old_cwd)
+        record("T45",
+               result.get("n_files_indexed", 0) >= 3
+               and result.get("n_symbols", 0) >= 6
+               and len(hits_hello) >= 1
+               and any(h["name"] == "MyButton" for h in hits_button)
+               and len(hits_main) >= 1,
+               f"result={result}, "
+               f"hello={len(hits_hello)}, button={len(hits_button)}, "
+               f"main={len(hits_main)}")
+
+        # T46 v6.2 PreToolUse Grep on indexed symbol injects advisory
+        # First seed the index for symbol "MyButton" in the live db
+        try:
+            conn = _index_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO symbols "
+                    "(path, name, kind, signature, line, indexed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("ui.tsx", "MyButton", "function",
+                     "export function MyButton(props)", 1, time.time()),
+                )
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError):
+            pass
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "MyButton"},
+            "session_id": "t46",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T46",
+               "ATrain index" in ctx and "MyButton" in ctx
+               and ("ui.tsx:1" in ctx or "ui.tsx" in ctx),
+               f"ctx_excerpt={ctx[:240]!r}")
+
     CONFIG_PATH = saved_config_path
 
     passed = sum(1 for _, s, _ in results if s == "PASS")
@@ -2766,6 +3066,37 @@ def main() -> None:
                     sys.stdout.write(f"  {k}: {v:.3f}\n")
                 else:
                     sys.stdout.write(f"  {k}: {v}\n")
+            return
+        if "--index" in sys.argv:
+            # Optional second arg: path to index (defaults to cwd)
+            root = None
+            for i, arg in enumerate(sys.argv):
+                if arg == "--index" and i + 1 < len(sys.argv):
+                    candidate = sys.argv[i + 1]
+                    if not candidate.startswith("--"):
+                        root = candidate
+            sys.stdout.write("=== ATrain codebase indexer ===\n")
+            sys.stdout.write(f"Indexing {root or os.getcwd()}...\n")
+            result = index_project(root)
+            for k, v in result.items():
+                sys.stdout.write(f"  {k}: {v}\n")
+            return
+        if "--index-status" in sys.argv:
+            sys.stdout.write("=== ATrain index status ===\n")
+            for k, v in index_status().items():
+                sys.stdout.write(f"  {k}: {v}\n")
+            return
+        if "--lookup" in sys.argv:
+            for i, arg in enumerate(sys.argv):
+                if arg == "--lookup" and i + 1 < len(sys.argv):
+                    sym = sys.argv[i + 1]
+                    sys.stdout.write(f"=== ATrain symbol lookup: {sym} ===\n")
+                    for r in lookup_symbol(sym):
+                        sys.stdout.write(
+                            f"  {r['path']}:{r['line']}  {r['kind']}  "
+                            f"{r['signature']}\n"
+                        )
+                    return
             return
         try:
             is_tty = sys.stdin.isatty()
