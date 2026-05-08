@@ -97,6 +97,11 @@ def _empty_stats() -> dict:
         "task_dispatches": {},
         "dispatch_blocks": 0,
         "dispatch_mismatches": 0,
+        # v4.0 honest accounting
+        "advisory_calls": 0,           # main-session calls where hook ADVISED but couldn't enforce
+        "real_subagent_calls": 0,      # actual Task dispatches that swapped models
+        "real_savings_usd": 0.0,       # only credited for real_subagent_calls
+        "advisory_savings_usd": 0.0,   # what we WOULD have saved if advisory was honored
     }
 
 
@@ -1146,10 +1151,28 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         full_id = config["model_registry"]["sonnet"]["id"]
         reason = f"{reason} (conf {confidence:.2f} → bump)"
 
+    # v4.0 — honest advisory. The Claude Code runtime ignores any
+    # model_override field a hook returns; the ONLY real per-call
+    # model swap on bundled-token subscriptions is via subagent
+    # dispatch (Task tool with subagent_type). The advisory below
+    # tells Claude what would have been cheap if dispatched, so the
+    # parent session can choose to spawn a subagent instead.
     advice = (
-        f"smart-router: {model_alias}{effort_text} "
-        f"({full_id}) — {reason} | conf={confidence:.2f}"
+        f"smart-router: would route {tool_name} → {model_alias}"
+        f"{effort_text} ({reason} | conf={confidence:.2f})."
     )
+    mode = config.get("mode", "balanced")
+    if tool_name in CACHEABLE_TOOLS and mode == "eco":
+        suggested_agent = (
+            config.get("routing_tables", {})
+            .get("eco", {}).get("recon", "recon-haiku")
+        )
+        advice += (
+            f"\n\nECO MODE TIP: this is a recon-class call. "
+            f"Consider Task(subagent_type='{suggested_agent}', prompt=...) "
+            "to run it on a cheaper bundled-token tier in parallel — "
+            "saves ~80% bundled tokens vs the parent session."
+        )
     if cache_advisory:
         advice = advice + "\n\n" + cache_advisory
     output = {
@@ -1158,13 +1181,15 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
             "permissionDecision": "allow",
             "additionalContext": advice,
         },
-        "model_override": full_id,
-        "reason": reason,
+        # v4.0: model_override + effort REMOVED — runtime ignored them.
+        # advised_* fields kept for plugin's analytics consumers only;
+        # they are not interpreted by Claude Code's runtime.
         "tier_label": tier_label,
+        "advised_model": full_id,
+        "advised_effort": log_effort,
+        "reason": reason,
         "confidence": round(confidence, 3),
     }
-    if model_alias != "haiku":
-        output["effort"] = effort
 
     log = load_session_log(session_id)
     log.append({
@@ -1245,6 +1270,21 @@ def _handle_post_tool_use_inner(data: dict) -> None:
     stats["estimated_savings_usd"] = (
         stats["baseline_opus_xhigh_cost_usd"] - stats["estimated_cost_usd"]
     )
+
+    # v4.0 honest accounting — only credit "real_savings_usd" when the
+    # call actually fanned out via Task to a different-model subagent.
+    # Main-session tool calls go to "advisory_savings_usd" because the
+    # runtime did not honor any model swap; the savings are aspirational.
+    saving = baseline_cost - actual_cost
+    is_subagent_dispatch = tool_name == "Task"
+    if is_subagent_dispatch and saving > 0:
+        stats["real_subagent_calls"] = stats.get("real_subagent_calls", 0) + 1
+        stats["real_savings_usd"] = stats.get("real_savings_usd", 0.0) + saving
+    else:
+        stats["advisory_calls"] = stats.get("advisory_calls", 0) + 1
+        stats["advisory_savings_usd"] = (
+            stats.get("advisory_savings_usd", 0.0) + max(0.0, saving)
+        )
 
     exit_code = data.get("exit_code")
     if exit_code is None and isinstance(data.get("tool_response"), dict):
@@ -1486,7 +1526,7 @@ def run_tests() -> None:
             "tool_input": {"path": "src/index.ts"},
             "session_id": "t01",
         })
-        record("T01", "haiku" in out.get("model_override", "")
+        record("T01", "haiku" in out.get("tier_label", "")
                and "effort" not in out, f"out={out}")
 
         # T02
@@ -1496,7 +1536,7 @@ def run_tests() -> None:
             "tool_input": {"path": "src/auth/login.ts", "content": "x"},
             "session_id": "t02",
         })
-        record("T02", "opus" in out.get("model_override", "")
+        record("T02", "opus" in out.get("tier_label", "")
                and "auth" in out.get("reason", "").lower(), f"out={out}")
 
         # T03
@@ -1506,7 +1546,7 @@ def run_tests() -> None:
             "tool_input": {"command": "grep -r TODO src/"},
             "session_id": "t03",
         })
-        record("T03", "haiku" in out.get("model_override", ""), f"out={out}")
+        record("T03", "haiku" in out.get("tier_label", ""), f"out={out}")
 
         # T04
         big = "x" * 5000
@@ -1516,8 +1556,8 @@ def run_tests() -> None:
             "tool_input": {"path": "src/large.ts", "content": big},
             "session_id": "t04",
         })
-        record("T04", "opus" in out.get("model_override", "")
-               and out.get("effort") in ("high", "xhigh"), f"out={out}")
+        record("T04", "opus" in out.get("tier_label", "")
+               and out.get("advised_effort") in ("high", "xhigh"), f"out={out}")
 
         # T05
         out = capture(handle_pre_tool_use, {
@@ -1526,8 +1566,8 @@ def run_tests() -> None:
             "tool_input": {"command": "npm test"},
             "session_id": "t05",
         })
-        record("T05", "sonnet" in out.get("model_override", "")
-               and out.get("effort") == "medium", f"out={out}")
+        record("T05", "sonnet" in out.get("tier_label", "")
+               and out.get("advised_effort") == "medium", f"out={out}")
 
         # T06
         med = "x" * 2000
@@ -1537,8 +1577,8 @@ def run_tests() -> None:
             "tool_input": {"path": "src/file.ts", "content": med},
             "session_id": "t06",
         })
-        record("T06", "sonnet" in out.get("model_override", "")
-               and out.get("effort") == "high", f"out={out}")
+        record("T06", "sonnet" in out.get("tier_label", "")
+               and out.get("advised_effort") == "high", f"out={out}")
 
         # T07
         out = capture(handle_pre_tool_use, {
@@ -1548,7 +1588,7 @@ def run_tests() -> None:
                            "new_string": "architecture design patterns review"},
             "session_id": "t07",
         })
-        record("T07", "opus" in out.get("model_override", ""), f"out={out}")
+        record("T07", "opus" in out.get("tier_label", ""), f"out={out}")
 
         # T08
         capture(handle_post_tool_use, {
@@ -1762,7 +1802,7 @@ def run_tests() -> None:
             "session_id": "t23",
         })
         record("T23",
-               "haiku" in out.get("model_override", "")
+               "haiku" in out.get("tier_label", "")
                and "effort" not in out,
                f"out={out}")
 
@@ -1899,6 +1939,77 @@ def run_tests() -> None:
         record("T33",
                "duplicate" in ctx.lower() and "127.0.0.1" in ctx,
                f"ctx={ctx[:200]!r}")
+
+        # T34 v4.0 honesty: model_override + effort fields are GONE from
+        # PreToolUse output. Runtime ignored them anyway. Replaced by
+        # tier_label / advised_model / advised_effort which are clearly
+        # marked as analytics-only.
+        atomic_write_json(CONFIG_PATH, _default_config())
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"path": "src/index.ts"},
+            "session_id": "t34",
+        })
+        record("T34",
+               "model_override" not in out
+               and "effort" not in out
+               and "tier_label" in out
+               and "advised_model" in out,
+               f"keys={sorted(out.keys())}")
+
+        # T35 v4.0 honest accounting: Task dispatches credit
+        # real_savings_usd; main-session calls credit advisory_savings_usd
+        # only. The two ledgers stay separate.
+        atomic_write_json(CONFIG_PATH, _default_config())
+        capture(handle_post_tool_use, {
+            "hook_event": "PostToolUse",
+            "tool_name": "Read",  # main session call
+            "tool_output": "x" * 200,
+            "model_used": "claude-haiku-4-5-20251001",
+            "effort_used": "none",
+            "session_id": "t35a",
+        })
+        cfg = load_config()
+        advisory_after_main = cfg["session_stats"].get("advisory_calls", 0)
+        real_after_main = cfg["session_stats"].get("real_subagent_calls", 0)
+
+        capture(handle_post_tool_use, {
+            "hook_event": "PostToolUse",
+            "tool_name": "Task",  # subagent dispatch
+            "tool_output": "x" * 200,
+            "model_used": "claude-haiku-4-5-20251001",
+            "effort_used": "none",
+            "session_id": "t35b",
+        })
+        cfg = load_config()
+        record("T35",
+               advisory_after_main == 1 and real_after_main == 0
+               and cfg["session_stats"].get("real_subagent_calls", 0) == 1
+               and cfg["session_stats"].get("real_savings_usd", 0.0) > 0,
+               f"after main: advisory={advisory_after_main}, "
+               f"real={real_after_main}; after task: "
+               f"advisory={cfg['session_stats'].get('advisory_calls')}, "
+               f"real={cfg['session_stats'].get('real_subagent_calls')}, "
+               f"real_savings=${cfg['session_stats'].get('real_savings_usd', 0):.5f}")
+
+        # T36 v4.0 eco mode: PreToolUse on Read in eco injects
+        # subagent-dispatch nudge in additionalContext.
+        eco_cfg = _default_config()
+        eco_cfg["mode"] = "eco"
+        atomic_write_json(CONFIG_PATH, eco_cfg)
+        out = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "TODO"},
+            "session_id": "t36",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T36",
+               "eco mode" in ctx.lower()
+               and "task(" in ctx.lower()
+               and "recon-haiku" in ctx,
+               f"ctx_excerpt={ctx[:240]!r}")
 
     CONFIG_PATH = saved_config_path
 
