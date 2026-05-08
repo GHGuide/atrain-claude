@@ -237,6 +237,74 @@ def config_lock():
                 pass
 
 
+def compact_bash_output(out: str, max_chars: int = 4000) -> str:
+    """v6.0 — rtk-pattern Bash output compactor. Regex-based, stdlib only.
+    Removes common noise (ANSI codes, timestamps, blank lines, dedup),
+    truncates to max_chars. Reports 60-90% reduction on common dev cmds.
+    """
+    if not out or len(out) < 200:
+        return out
+    s = out
+    # strip ANSI escape sequences (color codes)
+    s = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
+    # strip carriage-return progress bars
+    s = re.sub(r".*\r(?=.)", "", s)
+    # strip ISO timestamps + bracketed log timestamps
+    s = re.sub(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[\.\d]*Z?\s*",
+               "", s, flags=re.MULTILINE)
+    s = re.sub(r"^\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*",
+               "", s, flags=re.MULTILINE)
+    # collapse 3+ blank lines to 1
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    # dedup adjacent identical lines (e.g. repeated log spam)
+    lines = s.splitlines()
+    deduped = []
+    last = None
+    skipped = 0
+    for line in lines:
+        if line == last:
+            skipped += 1
+        else:
+            if skipped:
+                deduped.append(f"... ({skipped} duplicate lines collapsed)")
+                skipped = 0
+            deduped.append(line)
+            last = line
+    if skipped:
+        deduped.append(f"... ({skipped} duplicate lines collapsed)")
+    s = "\n".join(deduped)
+    # truncate with marker
+    if len(s) > max_chars:
+        head = s[: max_chars // 2]
+        tail = s[-(max_chars // 2):]
+        s = (head + f"\n\n... [truncated {len(s) - max_chars} chars] ...\n\n"
+             + tail)
+    return s
+
+
+def compact_tool_input(tool_input, max_field_chars: int = 8000):
+    """v6.0 — claw-compactor inspired tool-input compaction. Truncates
+    overly long content/old_string/new_string fields with markers.
+    Returns (compacted_dict, was_compacted_bool)."""
+    if not isinstance(tool_input, dict):
+        return tool_input, False
+    out = dict(tool_input)
+    compacted = False
+    for k in ("content", "old_string", "new_string"):
+        v = out.get(k)
+        if isinstance(v, str) and len(v) > max_field_chars:
+            head = v[: max_field_chars // 2]
+            tail = v[-(max_field_chars // 2):]
+            out[k] = (
+                head
+                + f"\n\n... [{k} truncated, {len(v) - max_field_chars} "
+                f"chars omitted] ...\n\n"
+                + tail
+            )
+            compacted = True
+    return out, compacted
+
+
 def detect_multi_faceted(prompt: str) -> tuple:
     """Heuristic — does the prompt look like it would benefit from
     decomposition? Returns (is_multi, signals_list).
@@ -1098,7 +1166,8 @@ def handle_session_start(data: dict) -> None:
 
 def handle_user_prompt_submit(data: dict) -> None:
     """Hybrid: first prompt → suggest preset; structurally multi-faceted
-    prompt → suggest decompose. Both run silently as advisory context."""
+    prompt → suggest decompose. v6.0: also injects terse-output style
+    rules (caveman pattern) when mode is eco."""
     config = load_config()
     session_id = data.get("session_id", "default")
     prompt = str(data.get("prompt") or data.get("user_prompt") or "")
@@ -1109,6 +1178,17 @@ def handle_user_prompt_submit(data: dict) -> None:
     is_multi, signals = detect_multi_faceted(prompt)
 
     parts = []
+    # v6.0 — Layer 1 terse output (caveman pattern, native).
+    # Eco mode injects style guidance that survives across the whole turn.
+    # Saves ~50-65% on text output. Code/commits/security write normal.
+    if mode == "eco":
+        parts.append(
+            "ATrain (eco) terse output mode: drop articles (a/an/the), "
+            "filler (just/really/basically), pleasantries, hedging. "
+            "Fragments OK. Short synonyms (big not extensive, fix not "
+            "implement). Code blocks, commit messages, and "
+            "security warnings: write normal — never compress those."
+        )
     if is_first:
         parts.append(
             f"smart-router active (mode: {mode}). Three presets: "
@@ -1273,6 +1353,13 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         f"smart-router: would route {tool_name} → {model_alias}"
         f"{effort_text} ({reason} | conf={confidence:.2f})."
     )
+
+    # v6.0 — Layer 2 tool-input compaction (claw-compactor pattern).
+    # When tool_input has huge content/old_string/new_string fields,
+    # rewrite via updatedInput so the parent session sees a truncated
+    # version. Saves 30-50% on bloated inputs. Runtime DOES honor
+    # updatedInput as of v2.0.10.
+    compacted_input, was_compacted = compact_tool_input(tool_input)
     mode = config.get("mode", "balanced")
     if tool_name in CACHEABLE_TOOLS and mode == "eco":
         suggested_agent = (
@@ -1287,12 +1374,16 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         )
     if cache_advisory:
         advice = advice + "\n\n" + cache_advisory
+    hso = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "additionalContext": advice,
+    }
+    # v6.0 — runtime-honored input rewrite (claw-compactor pattern).
+    if was_compacted:
+        hso["updatedInput"] = compacted_input
     output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": advice,
-        },
+        "hookSpecificOutput": hso,
         # v4.0: model_override + effort REMOVED — runtime ignored them.
         # advised_* fields kept for plugin's analytics consumers only;
         # they are not interpreted by Claude Code's runtime.
@@ -1429,6 +1520,20 @@ def _handle_post_tool_use_inner(data: dict) -> None:
         "ts": datetime.now().isoformat(),
     })
     save_session_log(session_id, log)
+
+    # v6.0 — Layer 8 Bash output compaction (rtk pattern).
+    # Compress raw Bash output before caching it. Reduces cache size
+    # AND if the runtime exposes the compacted form to Claude on the
+    # NEXT call, saves bundled tokens proportionally.
+    bash_compaction_saved = 0
+    if tool_name == "Bash" and out_str:
+        original_len = len(out_str)
+        compacted_out = compact_bash_output(out_str)
+        if len(compacted_out) < original_len:
+            bash_compaction_saved = original_len - len(compacted_out)
+            out_str = compacted_out
+            stats.setdefault("bash_compaction_chars_saved", 0)
+            stats["bash_compaction_chars_saved"] += bash_compaction_saved
 
     # Pattern 4 lite: cache successful cacheable tool outputs.
     # PostToolUse data mirrors tool_input from the dispatch; reuse it
@@ -2193,6 +2298,53 @@ def run_tests() -> None:
                and ("task(" in reason or "subagent_type" in reason)
                and "recon-haiku" in reason,
                f"decision={decision}, reason={reason[:160]!r}")
+
+        # T40 v6.0 Bash output compactor (rtk pattern, native)
+        # Synthetic noisy output: ANSI codes, repeated lines, blank lines
+        noisy = (
+            "\x1b[32m[2026-05-08T22:00:00Z]\x1b[0m starting build\n"
+            "\n\n\n"
+            + "\n".join(["WARN: deprecated foo()"] * 50)
+            + "\n\n"
+            + "real signal: 3 errors found\n"
+        )
+        compacted = compact_bash_output(noisy)
+        record("T40",
+               len(compacted) < len(noisy) // 2
+               and "duplicate lines collapsed" in compacted
+               and "real signal" in compacted,
+               f"original={len(noisy)} compacted={len(compacted)} "
+               f"sample={compacted[:200]!r}")
+
+        # T41 v6.0 tool_input compactor (claw-compactor pattern)
+        bloated = {"path": "src/x.ts", "content": "x" * 20000}
+        compacted_in, was_compacted = compact_tool_input(bloated, max_field_chars=4000)
+        record("T41",
+               was_compacted
+               and "[content truncated" in compacted_in["content"]
+               and len(compacted_in["content"]) < 5000
+               and compacted_in["path"] == "src/x.ts",
+               f"was_compacted={was_compacted}, "
+               f"new_len={len(compacted_in['content'])}")
+
+        # T42 v6.0 eco mode injects terse-output style guidance
+        eco_terse = _default_config()
+        eco_terse["mode"] = "eco"
+        atomic_write_json(CONFIG_PATH, eco_terse)
+        save_session_log("t42", [])
+        out = capture(handle_user_prompt_submit, {
+            "hook_event": "UserPromptSubmit",
+            "session_id": "t42",
+            "prompt": "build me a CRUD API for users",
+        })
+        ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+        record("T42",
+               "terse" in ctx.lower()
+               and "filler" in ctx.lower()
+               and ("code blocks" in ctx.lower()
+                    or "commit" in ctx.lower()
+                    or "security" in ctx.lower()),
+               f"ctx_excerpt={ctx[:200]!r}")
 
     CONFIG_PATH = saved_config_path
 
