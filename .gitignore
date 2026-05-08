@@ -3,6 +3,16 @@
 
 # Runtime session logs from the router hook
 /tmp/smart-router-*.json
+/tmp/atrain-*.json
+
+# ATrain runtime data (caches, locks)
+.claude/router-cache.sqlite
+.claude/router-config.json.lock
+.claude/atrain-memory/
+.claude/atrain-index/
+
+# Old plugin scaffold (pre-rename, can be deleted)
+smart-router/
 
 # Python
 __pycache__/

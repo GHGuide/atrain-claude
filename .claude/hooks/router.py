@@ -3105,6 +3105,10 @@ def lint_skill(skill_path: Path = None) -> int:
     Returns exit code: 0 = clean, 1 = drift detected."""
     if skill_path is None:
         candidates = [
+            # v4.1+ ATrain branding
+            ROOT / "skills" / "atrain" / "SKILL.md",
+            Path.home() / ".claude" / "skills" / "atrain" / "SKILL.md",
+            # legacy paths kept for back-compat
             ROOT / "skills" / "smart-router" / "SKILL.md",
             Path.home() / ".claude" / "skills" / "smart-router" / "SKILL.md",
         ]
