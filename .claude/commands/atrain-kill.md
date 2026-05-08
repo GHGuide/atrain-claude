@@ -1,12 +1,12 @@
 ---
-description: Turn off decompose mode. Subsequent prompts handled in single-Claude mode (no fan-out).
+description: ATrain kill — turn off subagent fan-out for this conversation. Subsequent prompts handled in single-Claude mode (no decomposition, no Task dispatch nudges).
 ---
 
-User invoked `/router-off`.
+User invoked `/atrain-kill`.
 
 Set `decompose_enabled` to `false` in the active router config and
-print a brief confirmation. The cost preset (eco/balanced/quality)
-stays as it was — only the decompose toggle flips.
+print a brief confirmation. The cost preset (eco / balanced /
+quality) stays as it was — only the fan-out toggle flips.
 
 ## Steps
 
@@ -16,10 +16,11 @@ stays as it was — only the decompose toggle flips.
 4. Print:
 
 ```
-smart-router · DECOMPOSE MODE: OFF
-  Cost preset stays:  {mode}
-  Future prompts handled in single-Claude mode.
-  Re-enable with /router-on or /router-once <task>.
+ATrain · KILLED
+  Fan-out:           OFF
+  Cost preset stays: {mode}
+  Hooks still fire (advisory + cost tracking + sensitive escalation).
+  Re-arm with /atrain-on. One-shot decompose with /atrain-once.
 ```
 
 Substitute `{mode}` with the value of `mode` from config.
@@ -37,7 +38,6 @@ cfg["decompose_enabled"] = False
 tmp = p.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(cfg, indent=2))
 os.replace(tmp, p)
-print("decompose_enabled = false")
-print("mode =", cfg.get("mode", "balanced"))
+print("ATrain killed. mode =", cfg.get("mode", "balanced"))
 EOF
 ```
