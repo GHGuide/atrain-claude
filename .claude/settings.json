@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/router.py"
+            "command": "python3 /Users/leonardo/.claude/hooks/router.py"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/router.py"
+            "command": "python3 /Users/leonardo/.claude/hooks/router.py"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/router.py"
+            "command": "python3 /Users/leonardo/.claude/hooks/router.py"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/router.py"
+            "command": "python3 /Users/leonardo/.claude/hooks/router.py"
           }
         ]
       }

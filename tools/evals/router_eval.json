@@ -1,298 +1,472 @@
 {
   "schema_version": "1.0",
-  "description": "Labeled corpus for smart-router classifiers. Two test sets:\n  task_dispatch  — (prompt, description) → expected subagent_type\n  tool_routing   — (tool_name, tool_input) → expected (model_alias, effort)\n\nUse run_eval.py to score classify_to_agent and classify_task against\nthese labels. Report accuracy, confusion matrix, and per-category errors.\n",
+  "description": "Labeled corpus for smart-router classifiers. Two test sets:\n  task_dispatch  \u2014 (prompt, description) \u2192 expected subagent_type\n  tool_routing   \u2014 (tool_name, tool_input) \u2192 expected (model_alias, effort)\n\nUse run_eval.py to score classify_to_agent and classify_task against\nthese labels. Report accuracy, confusion matrix, and per-category errors.\n",
   "task_dispatch": [
-    {"id": "td01", "category": "recon",
-     "prompt": "find all TODO comments in src/",
-     "description": "search for TODOs",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td02", "category": "recon",
-     "prompt": "where is the User model defined",
-     "description": "locate definition",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td03", "category": "recon",
-     "prompt": "list all files importing the auth module",
-     "description": "import scan",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td04", "category": "recon",
-     "prompt": "show me the structure of the api directory",
-     "description": "tree explore",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td05", "category": "recon",
-     "prompt": "grep for any usages of the deprecated foo() function",
-     "description": "deprecated search",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"},
-
-    {"id": "td06", "category": "impl",
-     "prompt": "write a small helper to format dates as ISO 8601",
-     "description": "date helper",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td07", "category": "impl",
-     "prompt": "fix the bug where the cart total is off by one cent",
-     "description": "rounding bug",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td08", "category": "impl",
-     "prompt": "edit the logger to add a timestamp prefix",
-     "description": "logger tweak",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td09", "category": "impl",
-     "prompt": "add a unit test for the multiply function",
-     "description": "single test",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td10", "category": "impl",
-     "prompt": "modify the regex to also accept uppercase letters",
-     "description": "regex tweak",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-
-    {"id": "td11", "category": "api",
-     "prompt": "add a new POST /users/:id/avatar endpoint",
-     "description": "avatar upload route",
-     "expected_balanced": "api-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "architect-opus"},
-    {"id": "td12", "category": "api",
-     "prompt": "wire up the Stripe API integration for subscriptions",
-     "description": "Stripe integration",
-     "expected_balanced": "api-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "architect-opus"},
-    {"id": "td13", "category": "api",
-     "prompt": "build a GraphQL resolver for the orders connection",
-     "description": "graphql resolver",
-     "expected_balanced": "api-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "architect-opus"},
-    {"id": "td14", "category": "api",
-     "prompt": "create the REST API endpoints for the products catalog",
-     "description": "products CRUD",
-     "expected_balanced": "api-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "architect-opus"},
-    {"id": "td15", "category": "api",
-     "prompt": "add a third-party webhook handler for shipping events",
-     "description": "shipping webhook",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-
-    {"id": "td16", "category": "architecture",
-     "prompt": "refactor the entire payment module to use the new event bus",
-     "description": "payment refactor",
-     "expected_balanced": "architect-opus",
-     "expected_eco": "architect-opus",
-     "expected_quality": "architect-opus"},
-    {"id": "td17", "category": "architecture",
-     "prompt": "redesign the caching layer to support distributed invalidation",
-     "description": "cache redesign",
-     "expected_balanced": "architect-opus",
-     "expected_eco": "architect-opus",
-     "expected_quality": "architect-opus"},
-    {"id": "td18", "category": "architecture",
-     "prompt": "find the bottleneck in the order processing pipeline and fix it",
-     "description": "perf optimization",
-     "expected_balanced": "architect-opus",
-     "expected_eco": "architect-opus",
-     "expected_quality": "architect-opus"},
-    {"id": "td19", "category": "architecture",
-     "prompt": "review all my service classes for design pattern violations",
-     "description": "design review",
-     "expected_balanced": "architect-opus",
-     "expected_eco": "architect-opus",
-     "expected_quality": "architect-opus"},
-    {"id": "td20", "category": "architecture",
-     "prompt": "do a system design review for the new analytics pipeline",
-     "description": "system design",
-     "expected_balanced": "architect-opus",
-     "expected_eco": "architect-opus",
-     "expected_quality": "architect-opus"},
-
-    {"id": "td21", "category": "sensitive",
-     "prompt": "implement bcrypt password hashing for the user signup flow",
-     "description": "auth hashing",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td22", "category": "sensitive",
-     "prompt": "rotate the API key used by the billing service",
-     "description": "key rotation",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td23", "category": "sensitive",
-     "prompt": "add JWT signature verification to the auth middleware",
-     "description": "jwt verify",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td24", "category": "sensitive",
-     "prompt": "write a database migration that drops the legacy sessions table",
-     "description": "drop sessions",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td25", "category": "sensitive",
-     "prompt": "add HMAC signature checking on the GitHub webhook handler",
-     "description": "webhook hmac",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td26", "category": "sensitive",
-     "prompt": "fix the SQL injection vulnerability in the search endpoint",
-     "description": "sqli fix",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-    {"id": "td27", "category": "sensitive",
-     "prompt": "tighten the CORS policy on the API gateway",
-     "description": "cors policy",
-     "expected_balanced": "secure-opus",
-     "expected_eco": "secure-opus",
-     "expected_quality": "secure-opus"},
-
-    {"id": "td28", "category": "ambiguous",
-     "prompt": "look at the README and tell me what's outdated",
-     "description": "readme review",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td29", "category": "ambiguous",
-     "prompt": "improve the error messages thrown by the validator",
-     "description": "error msg polish",
-     "expected_balanced": "impl-sonnet",
-     "expected_eco": "impl-sonnet",
-     "expected_quality": "impl-sonnet"},
-    {"id": "td30", "category": "ambiguous",
-     "prompt": "search the docs for anything mentioning rate limiting",
-     "description": "docs search",
-     "expected_balanced": "recon-haiku",
-     "expected_eco": "recon-haiku",
-     "expected_quality": "impl-sonnet"}
+    {
+      "id": "td01",
+      "category": "recon",
+      "prompt": "find all TODO comments in src/",
+      "description": "search for TODOs",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td02",
+      "category": "recon",
+      "prompt": "where is the User model defined",
+      "description": "locate definition",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td03",
+      "category": "recon",
+      "prompt": "list all files importing the auth module",
+      "description": "import scan",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td04",
+      "category": "recon",
+      "prompt": "show me the structure of the api directory",
+      "description": "tree explore",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td05",
+      "category": "recon",
+      "prompt": "grep for any usages of the deprecated foo() function",
+      "description": "deprecated search",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td06",
+      "category": "impl",
+      "prompt": "write a small helper to format dates as ISO 8601",
+      "description": "date helper",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td07",
+      "category": "impl",
+      "prompt": "fix the bug where the cart total is off by one cent",
+      "description": "rounding bug",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td08",
+      "category": "impl",
+      "prompt": "edit the logger to add a timestamp prefix",
+      "description": "logger tweak",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td09",
+      "category": "impl",
+      "prompt": "add a unit test for the multiply function",
+      "description": "single test",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td10",
+      "category": "impl",
+      "prompt": "modify the regex to also accept uppercase letters",
+      "description": "regex tweak",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td11",
+      "category": "api",
+      "prompt": "add a new POST /users/:id/avatar endpoint",
+      "description": "avatar upload route",
+      "expected_balanced": "api-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td12",
+      "category": "sensitive",
+      "prompt": "wire up the Stripe API integration for subscriptions",
+      "description": "Stripe integration (money handling \u2014 escalate)",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td13",
+      "category": "api",
+      "prompt": "build a GraphQL resolver for the orders connection",
+      "description": "graphql resolver",
+      "expected_balanced": "api-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td14",
+      "category": "api",
+      "prompt": "create the REST API endpoints for the products catalog",
+      "description": "products CRUD",
+      "expected_balanced": "api-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td15",
+      "category": "api",
+      "prompt": "add a third-party webhook handler for shipping events",
+      "description": "shipping webhook",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td16",
+      "category": "sensitive",
+      "prompt": "refactor the entire payment module to use the new event bus",
+      "description": "payment refactor (money handling \u2014 escalate)",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td17",
+      "category": "architecture",
+      "prompt": "redesign the caching layer to support distributed invalidation",
+      "description": "cache redesign",
+      "expected_balanced": "architect-opus",
+      "expected_eco": "architect-opus",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td18",
+      "category": "architecture",
+      "prompt": "find the bottleneck in the order processing pipeline and fix it",
+      "description": "perf optimization",
+      "expected_balanced": "architect-opus",
+      "expected_eco": "architect-opus",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td19",
+      "category": "architecture",
+      "prompt": "review all my service classes for design pattern violations",
+      "description": "design review",
+      "expected_balanced": "architect-opus",
+      "expected_eco": "architect-opus",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td20",
+      "category": "architecture",
+      "prompt": "do a system design review for the new analytics pipeline",
+      "description": "system design",
+      "expected_balanced": "architect-opus",
+      "expected_eco": "architect-opus",
+      "expected_quality": "architect-opus"
+    },
+    {
+      "id": "td21",
+      "category": "sensitive",
+      "prompt": "implement bcrypt password hashing for the user signup flow",
+      "description": "auth hashing",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td22",
+      "category": "sensitive",
+      "prompt": "rotate the API key used by the billing service",
+      "description": "key rotation",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td23",
+      "category": "sensitive",
+      "prompt": "add JWT signature verification to the auth middleware",
+      "description": "jwt verify",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td24",
+      "category": "sensitive",
+      "prompt": "write a database migration that drops the legacy sessions table",
+      "description": "drop sessions",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td25",
+      "category": "sensitive",
+      "prompt": "add HMAC signature checking on the GitHub webhook handler",
+      "description": "webhook hmac",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td26",
+      "category": "sensitive",
+      "prompt": "fix the SQL injection vulnerability in the search endpoint",
+      "description": "sqli fix",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td27",
+      "category": "sensitive",
+      "prompt": "tighten the CORS policy on the API gateway",
+      "description": "cors policy",
+      "expected_balanced": "secure-opus",
+      "expected_eco": "secure-opus",
+      "expected_quality": "secure-opus"
+    },
+    {
+      "id": "td28",
+      "category": "ambiguous",
+      "prompt": "look at the README and tell me what's outdated",
+      "description": "readme review",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td29",
+      "category": "ambiguous",
+      "prompt": "improve the error messages thrown by the validator",
+      "description": "error msg polish",
+      "expected_balanced": "impl-sonnet",
+      "expected_eco": "impl-sonnet",
+      "expected_quality": "impl-sonnet"
+    },
+    {
+      "id": "td30",
+      "category": "ambiguous",
+      "prompt": "search the docs for anything mentioning rate limiting",
+      "description": "docs search",
+      "expected_balanced": "recon-haiku",
+      "expected_eco": "recon-haiku",
+      "expected_quality": "impl-sonnet"
+    }
   ],
   "tool_routing": [
-    {"id": "tr01", "category": "haiku-recon",
-     "tool_name": "Read",
-     "tool_input": {"path": "src/index.ts"},
-     "expected_alias": "haiku",
-     "expected_effort": "none"},
-    {"id": "tr02", "category": "haiku-recon",
-     "tool_name": "Glob",
-     "tool_input": {"pattern": "**/*.ts"},
-     "expected_alias": "haiku",
-     "expected_effort": "none"},
-    {"id": "tr03", "category": "haiku-recon",
-     "tool_name": "Bash",
-     "tool_input": {"command": "grep -rn TODO src/"},
-     "expected_alias": "haiku",
-     "expected_effort": "none"},
-    {"id": "tr04", "category": "haiku-recon",
-     "tool_name": "LS",
-     "tool_input": {"path": "src"},
-     "expected_alias": "haiku",
-     "expected_effort": "none"},
-    {"id": "tr05", "category": "haiku-recon",
-     "tool_name": "Grep",
-     "tool_input": {"pattern": "FIXME"},
-     "expected_alias": "haiku",
-     "expected_effort": "none"},
-
-    {"id": "tr06", "category": "sonnet-medium",
-     "tool_name": "Write",
-     "tool_input": {"path": "src/util.ts",
-                    "content": "export const cap = (s: string) => s.toUpperCase();"},
-     "expected_alias": "sonnet",
-     "expected_effort": "medium"},
-    {"id": "tr07", "category": "sonnet-medium",
-     "tool_name": "Bash",
-     "tool_input": {"command": "npm test"},
-     "expected_alias": "sonnet",
-     "expected_effort": "medium"},
-    {"id": "tr08", "category": "sonnet-medium",
-     "tool_name": "Bash",
-     "tool_input": {"command": "pytest tests/"},
-     "expected_alias": "sonnet",
-     "expected_effort": "medium"},
-
-    {"id": "tr09", "category": "sonnet-high",
-     "tool_name": "Write",
-     "tool_input": {"path": "src/cart.ts",
-                    "content": "__PAD_2000__"},
-     "expected_alias": "sonnet",
-     "expected_effort": "high"},
-    {"id": "tr10", "category": "sonnet-high",
-     "tool_name": "Edit",
-     "tool_input": {"path": "src/api.ts", "old_string": "// add endpoint",
-                    "new_string": "router.get('/users/:id', getUser);"},
-     "expected_alias": "sonnet",
-     "expected_effort": "high"},
-
-    {"id": "tr11", "category": "opus-high",
-     "tool_name": "Write",
-     "tool_input": {"path": "src/orchestrator.ts",
-                    "content": "__PAD_5500__"},
-     "expected_alias": "opus",
-     "expected_effort": "high"},
-    {"id": "tr12", "category": "opus-high",
-     "tool_name": "Edit",
-     "tool_input": {"path": "src/x.ts", "old_string": "a",
-                    "new_string": "refactor entire architecture into design patterns"},
-     "expected_alias": "opus",
-     "expected_effort": "high"},
-
-    {"id": "tr13", "category": "opus-xhigh-sensitive",
-     "tool_name": "Write",
-     "tool_input": {"path": "src/auth/login.ts",
-                    "content": "export function login() {}"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"},
-    {"id": "tr14", "category": "opus-xhigh-sensitive",
-     "tool_name": "Write",
-     "tool_input": {"path": ".env.local", "content": "API_KEY=xyz"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"},
-    {"id": "tr15", "category": "opus-xhigh-sensitive",
-     "tool_name": "Edit",
-     "tool_input": {"path": "src/crypto/jwt.ts",
-                    "old_string": "verify",
-                    "new_string": "function verify(token, secret) { return jwt.verify(token, secret); }"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"},
-    {"id": "tr16", "category": "opus-xhigh-sensitive",
-     "tool_name": "Bash",
-     "tool_input": {"command": "psql -c 'ALTER TABLE users DROP COLUMN legacy_id;'"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"},
-
-    {"id": "tr17", "category": "user-phrase-escalation",
-     "tool_name": "Write",
-     "tool_input": {"path": "src/util.ts",
-                    "content": "// think carefully — this is critical\nexport function add(a,b){return a+b;}"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"},
-
-    {"id": "tr18", "category": "manifest-escalation",
-     "tool_name": "Edit",
-     "tool_input": {"path": "package.json", "old_string": "1.0.0", "new_string": "1.1.0"},
-     "expected_alias": "opus",
-     "expected_effort": "xhigh"}
+    {
+      "id": "tr01",
+      "category": "haiku-recon",
+      "tool_name": "Read",
+      "tool_input": {
+        "path": "src/index.ts"
+      },
+      "expected_alias": "haiku",
+      "expected_effort": "none"
+    },
+    {
+      "id": "tr02",
+      "category": "haiku-recon",
+      "tool_name": "Glob",
+      "tool_input": {
+        "pattern": "**/*.ts"
+      },
+      "expected_alias": "haiku",
+      "expected_effort": "none"
+    },
+    {
+      "id": "tr03",
+      "category": "haiku-recon",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "grep -rn TODO src/"
+      },
+      "expected_alias": "haiku",
+      "expected_effort": "none"
+    },
+    {
+      "id": "tr04",
+      "category": "haiku-recon",
+      "tool_name": "LS",
+      "tool_input": {
+        "path": "src"
+      },
+      "expected_alias": "haiku",
+      "expected_effort": "none"
+    },
+    {
+      "id": "tr05",
+      "category": "haiku-recon",
+      "tool_name": "Grep",
+      "tool_input": {
+        "pattern": "FIXME"
+      },
+      "expected_alias": "haiku",
+      "expected_effort": "none"
+    },
+    {
+      "id": "tr06",
+      "category": "sonnet-medium",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": "src/util.ts",
+        "content": "export const cap = (s: string) => s.toUpperCase();"
+      },
+      "expected_alias": "sonnet",
+      "expected_effort": "medium"
+    },
+    {
+      "id": "tr07",
+      "category": "sonnet-medium",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "npm test"
+      },
+      "expected_alias": "sonnet",
+      "expected_effort": "medium"
+    },
+    {
+      "id": "tr08",
+      "category": "sonnet-medium",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "pytest tests/"
+      },
+      "expected_alias": "sonnet",
+      "expected_effort": "medium"
+    },
+    {
+      "id": "tr09",
+      "category": "sonnet-high",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": "src/cart.ts",
+        "content": "__PAD_2000__"
+      },
+      "expected_alias": "sonnet",
+      "expected_effort": "high"
+    },
+    {
+      "id": "tr10",
+      "category": "sonnet-high",
+      "tool_name": "Edit",
+      "tool_input": {
+        "path": "src/api.ts",
+        "old_string": "// add endpoint",
+        "new_string": "router.get('/users/:id', getUser);"
+      },
+      "expected_alias": "sonnet",
+      "expected_effort": "high"
+    },
+    {
+      "id": "tr11",
+      "category": "opus-high",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": "src/orchestrator.ts",
+        "content": "__PAD_5500__"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "high"
+    },
+    {
+      "id": "tr12",
+      "category": "opus-high",
+      "tool_name": "Edit",
+      "tool_input": {
+        "path": "src/x.ts",
+        "old_string": "a",
+        "new_string": "refactor entire architecture into design patterns"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "high"
+    },
+    {
+      "id": "tr13",
+      "category": "opus-xhigh-sensitive",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": "src/auth/login.ts",
+        "content": "export function login() {}"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    },
+    {
+      "id": "tr14",
+      "category": "opus-xhigh-sensitive",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": ".env.local",
+        "content": "API_KEY=xyz"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    },
+    {
+      "id": "tr15",
+      "category": "opus-xhigh-sensitive",
+      "tool_name": "Edit",
+      "tool_input": {
+        "path": "src/crypto/jwt.ts",
+        "old_string": "verify",
+        "new_string": "function verify(token, secret) { return jwt.verify(token, secret); }"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    },
+    {
+      "id": "tr16",
+      "category": "opus-xhigh-sensitive",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "psql -c 'ALTER TABLE users DROP COLUMN legacy_id;'"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    },
+    {
+      "id": "tr17",
+      "category": "user-phrase-escalation",
+      "tool_name": "Write",
+      "tool_input": {
+        "path": "src/util.ts",
+        "content": "// think carefully \u2014 this is critical\nexport function add(a,b){return a+b;}"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    },
+    {
+      "id": "tr18",
+      "category": "manifest-escalation",
+      "tool_name": "Edit",
+      "tool_input": {
+        "path": "package.json",
+        "old_string": "1.0.0",
+        "new_string": "1.1.0"
+      },
+      "expected_alias": "opus",
+      "expected_effort": "xhigh"
+    }
   ]
 }

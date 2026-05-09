@@ -1,0 +1,34 @@
+workload               | mode       |   in tok |  out tok |     cost |    vs Opus
+------------------------------------------------------------------------------------------
+A: recon-heavy         | opus only  |   85,500 |   41,800 | $1.4725 |          —
+A: recon-heavy         | eco        |   85,500 |    7,750 | $0.2140 |       -85%
+A: recon-heavy         | balanced   |   85,500 |    7,750 | $0.2140 |       -85%
+A: recon-heavy         | quality    |   85,500 |   11,050 | $0.3415 |       -77%
+------------------------------------------------------------------------------------------
+B: typical coding      | opus only  |   81,000 |   39,600 | $1.3950 |          —
+B: typical coding      | eco        |   81,000 |   13,550 | $0.4197 |       -70%
+B: typical coding      | balanced   |   81,000 |   13,550 | $0.4197 |       -70%
+B: typical coding      | quality    |   81,000 |   23,450 | $0.8222 |       -41%
+------------------------------------------------------------------------------------------
+C: heavy refactor      | opus only  |   81,000 |   39,600 | $1.3950 |          —
+C: heavy refactor      | eco        |   81,000 |   20,950 | $0.7430 |       -47%
+C: heavy refactor      | balanced   |   81,000 |   20,950 | $0.7430 |       -47%
+C: heavy refactor      | quality    |   81,000 |   28,350 | $0.9930 |       -29%
+------------------------------------------------------------------------------------------
+
+Tier distribution per workload + mode:
+
+  A: recon-heavy
+    eco        haiku+none:15 opus+xhigh:1 sonnet+medium:3
+    balanced   haiku+none:15 opus+xhigh:1 sonnet+medium:3
+    quality    haiku+none:15 opus+high:3 opus+xhigh:1
+
+  B: typical coding
+    eco        haiku+none:7 opus+xhigh:2 sonnet+high:4 sonnet+medium:5
+    balanced   haiku+none:7 opus+xhigh:2 sonnet+high:4 sonnet+medium:5
+    quality    haiku+none:7 opus+high:5 opus+xhigh:6
+
+  C: heavy refactor
+    eco        haiku+none:5 opus+high:6 opus+xhigh:3 sonnet+high:1 sonnet+medium:3
+    balanced   haiku+none:5 opus+high:6 opus+xhigh:3 sonnet+high:1 sonnet+medium:3
+    quality    haiku+none:5 opus+high:3 opus+xhigh:10

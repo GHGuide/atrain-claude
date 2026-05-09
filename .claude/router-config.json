@@ -2,7 +2,7 @@
   "version": "3.0.0",
   "mode": "balanced",
   "accuracy_target": 99.0,
-  "last_model_check": "2026-05-07T00:00:00",
+  "last_model_check": "2026-05-07T21:29:05.061820",
   "model_registry": {
     "opus": {
       "id": "claude-opus-4-7",
@@ -31,7 +31,7 @@
     },
     "haiku": {
       "id": "claude-haiku-4-5-20251001",
-      "alias": "claude-haiku-4-5",
+      "alias": "claude-haiku-4-5-20251001",
       "effort_support": [],
       "input_price_per_1m": 0.8,
       "output_price_per_1m": 4.0
@@ -124,45 +124,47 @@
     }
   },
   "session_stats": {
-    "total_calls": 56,
+    "total_calls": 217,
     "calls_by_tier": {
-      "haiku_none": 8,
+      "haiku_none": 57,
       "sonnet_low": 0,
-      "sonnet_medium": 32,
-      "sonnet_high": 4,
+      "sonnet_medium": 98,
+      "sonnet_high": 19,
       "sonnet_max": 0,
       "opus_low": 0,
       "opus_medium": 0,
-      "opus_high": 3,
-      "opus_xhigh": 9,
+      "opus_high": 13,
+      "opus_xhigh": 30,
       "opus_max": 0
     },
     "tokens_by_tier": {
-      "haiku_none": 7094,
+      "haiku_none": 59303,
       "sonnet_low": 0,
-      "sonnet_medium": 107493,
-      "sonnet_high": 17419,
+      "sonnet_medium": 431240,
+      "sonnet_high": 245421,
       "sonnet_max": 0,
       "opus_low": 0,
       "opus_medium": 0,
-      "opus_high": 13900,
-      "opus_xhigh": 52434,
+      "opus_high": 90385,
+      "opus_xhigh": 235281,
       "opus_max": 0
     },
-    "escalations_total": 14,
-    "escalations_auth_secrets": 11,
+    "escalations_total": 40,
+    "escalations_auth_secrets": 25,
     "escalations_multi_file": 0,
-    "escalations_error_recovery": 2,
-    "escalations_user_phrase": 1,
+    "escalations_error_recovery": 10,
+    "escalations_user_phrase": 5,
     "escalations_output_verify": 0,
-    "estimated_cost_usd": 3.560406,
-    "baseline_opus_xhigh_cost_usd": 4.958500000000001,
-    "estimated_savings_usd": 1.3980940000000008,
+    "estimated_cost_usd": 18.528777000000012,
+    "baseline_opus_xhigh_cost_usd": 26.54075000000001,
+    "estimated_savings_usd": 8.011972999999998,
     "task_dispatches": {
-      "general-purpose": 3
+      "general-purpose": 7
     },
-    "dispatch_blocks": 3,
-    "dispatch_mismatches": 0
+    "dispatch_blocks": 7,
+    "dispatch_mismatches": 0,
+    "advisory_calls": 94,
+    "advisory_savings_usd": 4.625233000000002
   },
   "calibration_history": [],
   "routing_tables": {

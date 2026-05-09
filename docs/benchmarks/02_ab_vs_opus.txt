@@ -1,0 +1,50 @@
+     savings        → $0.04750  (61%)
+
+[07] endpoint kw
+     WITH    router → sonnet+high    claude-sonnet-4-6
+                       1100 out tok  $0.03000  reason=api-keyword: endpoint
+     WITHOUT router → opus+xhigh     claude-opus-4-7
+                       2200 out tok  $0.07750
+     savings        → $0.04750  (61%)
+
+[08] large Write 5000ch
+     WITH    router → opus+high      claude-sonnet-4-6
+                       1700 out tok  $0.03900  reason=large Write (5407 chars)
+     WITHOUT router → opus+xhigh     claude-opus-4-7
+                       2200 out tok  $0.07750
+     savings        → $0.03850  (50%)
+
+[09] auth file
+     WITH    router → opus+xhigh     claude-sonnet-4-6
+                       2200 out tok  $0.04650  reason=sensitive: auth
+     WITHOUT router → opus+xhigh     claude-opus-4-7
+                       2200 out tok  $0.07750
+     savings        → $0.03100  (40%)
+
+[10] Task crypto block
+     WITH    router → opus+xhigh     claude-opus-4-7
+                       2200 out tok  $0.07750  reason=BLOCK→opus
+     WITHOUT router → opus+xhigh     claude-opus-4-7
+                       2200 out tok  $0.07750
+     savings        → $0.00000  (0%)
+
+================================================================================================
+  TOTALS — 10 prompts
+================================================================================================
+                       WITH router    WITHOUT (all-opus)   delta
+  Input tokens             45,000        45,000        0
+  Output tokens            10,250        22,000    -11,750
+  Cost                 $   0.3197    $   0.7750    -$0.4553
+  Savings vs all-opus                                       58.7%
+
+  WITH router tier distribution:
+    haiku+none     ███ 3
+    opus+high      █ 1
+    opus+xhigh     ██ 2
+    sonnet+high    ██ 2
+    sonnet+medium  ██ 2
+
+  Projected to 1000 calls at this distribution:
+    WITH router  : $31.97
+    WITHOUT      : $77.50
+    Saved        : $45.53  (58.7%)

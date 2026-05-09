@@ -1,0 +1,43 @@
+========================================================================
+  smart-router classifier evaluation
+========================================================================
+
+Task dispatch — classify_to_agent
+  overall: 90/90 (100.0%)
+
+  Per-category:
+    ambiguous        9/9   (100%)
+    api             12/12  (100%)
+    architecture    12/12  (100%)
+    impl            15/15  (100%)
+    recon           15/15  (100%)
+    sensitive       27/27  (100%)
+
+  Per-mode:
+    eco        30/30 (100%)
+    balanced   30/30 (100%)
+    quality    30/30 (100%)
+
+  Failures:
+    (none)
+
+Tool routing — classify_task + hard_escalation
+  overall (alias+effort): 18/18 (100.0%)
+  alias match only:       18/18 (100.0%)
+  effort match only:      18/18 (100.0%)
+
+  Per-category:
+    haiku-recon                5/5   (100%)
+    manifest-escalation        1/1   (100%)
+    opus-high                  2/2   (100%)
+    opus-xhigh-sensitive       4/4   (100%)
+    sonnet-high                2/2   (100%)
+    sonnet-medium              3/3   (100%)
+    user-phrase-escalation     1/1   (100%)
+
+  Failures:
+    (none)
+
+========================================================================
+  GRAND TOTAL: 108/108 (100.0%)
+========================================================================

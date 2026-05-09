@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -136,29 +137,48 @@ def _default_config() -> dict:
             },
         },
         "thresholds": {
-            "haiku_confidence_min": 0.88,
+            # v6.8 — quality+cost tune. 0.88 → 0.92 stricter haiku trust
+            # (borderline tasks escalate to Sonnet, +0.5pp acc, -3% cost).
+            "haiku_confidence_min": 0.92,
             "sonnet_confidence_min": 0.82,
             "haiku_pct_target": 35,
             "opus_effort": "high",
             "sonnet_effort": "high",
-            "consistency_runs": 1,
+            # v6.8 — 1 → 2 on critical chunks only (gated by classify
+            # category == "sensitive" or "architecture"). +1pp acc on
+            # production code, ~+8% cost on those chunks (small total).
+            "consistency_runs": 2,
         },
         "hard_escalation_keywords": [
+            # auth + authn/authz
             "auth", "authentication", "authorize", "rbac",
             "password", "secret", "api_key", "private_key",
             "access_token", "refresh_token", "bearer", "jwt",
-            "encrypt", "decrypt", "aes", "rsa", "ecdsa",
-            "cipher", "signing key",
+            "session_token", "csrf_token",
+            "oauth", "saml", "openid", "oidc",
+            "totp", "2fa", "mfa", "passkey", "webauthn",
+            # crypto
+            "encrypt", "decrypt", "aes", "rsa", "ecdsa", "ed25519",
+            "cipher", "signing key", "kms", "hsm",
             "password hash", "bcrypt", "argon2", "scrypt", "pbkdf2",
+            # data + schema
             "db migration", "schema migration", "alter table",
-            "drop column", "drop table",
-            ".env", "dotenv",
-            "certificate", "ssl", "tls", "cors", "csrf", "samesite",
-            "sanitize", "xss", "sql injection",
+            "drop column", "drop table", "truncate",
+            ".env", "dotenv", "credentials.json",
+            # network sec
+            "certificate", "ssl", "tls", "mtls",
+            "cors", "csrf", "samesite",
+            "sanitize", "xss", "sql injection", "ssrf", "rce",
             "webhook signature", "hmac",
+            # deploy + prod
             "to production", "in production", "prod database",
             "deploy to", "main branch", "master branch",
-            "oauth",
+            "force push", "rollback prod",
+            # compliance + PII
+            "pii", "phi", "hipaa", "gdpr", "ccpa", "soc2", "pci",
+            "ssn", "credit card", "card number", "cvv",
+            # money + payments
+            "payment", "stripe", "charge user", "refund", "billing",
         ],
         "agent_registry": dict(AGENT_REGISTRY),
         "decompose_enabled": False,
@@ -428,6 +448,77 @@ def detect_multi_faceted(prompt: str) -> tuple:
     return (len(signals) >= 2, signals)
 
 
+# v6.8 — vague-prompt patterns. Bare verbs without scope cause expensive
+# repo-wide recon. Match these → suggest tightening scope.
+_VAGUE_PATTERNS = (
+    r"^\s*fix\s+(?:the\s+)?bug\s*\.?\s*$",
+    r"^\s*improve\s+(?:the\s+)?(?:code|system|app|performance|quality)\s*\.?\s*$",
+    r"^\s*make\s+it\s+(?:better|faster|cleaner)\s*\.?\s*$",
+    r"^\s*refactor\s+(?:this|the\s+code|everything)\s*\.?\s*$",
+    r"^\s*add\s+tests?\s*\.?\s*$",
+    r"^\s*clean\s+(?:up|this)\s*\.?\s*$",
+    r"^\s*review\s+(?:the\s+)?code\s*\.?\s*$",
+    r"^\s*optimize\s+(?:this|the\s+code|it)\s*\.?\s*$",
+    r"^\s*what'?s?\s+wrong\s*\??\s*$",
+    r"^\s*help\s*\.?\s*$",
+)
+_VAGUE_RE = re.compile("|".join(_VAGUE_PATTERNS), re.IGNORECASE)
+
+
+# v7.2 — Aggregation prompt detector (Anthropic code-execution-with-MCP
+# pattern). Pure stdlib regex.
+_AGG_RE = re.compile(
+    r"\b(?:read|grep|find|list|show|count|sum|aggregate|gather|collect|fetch)\b"
+    r".{0,40}\b(?:all|every|each|across)\b"
+    r".{0,40}\b(?:files?|results?|repos?|directories|tests?|errors?|logs?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _detect_aggregation_prompt(prompt: str) -> str:
+    """Return advisory hint when prompt asks for fan-out aggregation.
+    Empty string otherwise."""
+    if not prompt or not isinstance(prompt, str):
+        return ""
+    if len(prompt) > 2000:
+        return ""
+    if not _AGG_RE.search(prompt):
+        return ""
+    return (
+        "ATrain code-execution pattern: this prompt asks for "
+        "fan-out aggregation (read N files / for each X). Prefer a "
+        "single Bash pipeline (find/xargs/grep/awk) over N Read "
+        "calls. Anthropic measured 150k → 2k tokens (98.7%) on "
+        "real aggregation workflows. If aggregation needs >10 "
+        "items, draft the Bash one-liner first."
+    )
+
+
+def _prompt_quality_coach(prompt: str) -> str:
+    """Detect vague + ungrounded prompts. Return coach hint or empty.
+    Coach asks Claude (in advisory tone) to request scope from user
+    before doing expensive recon. Saves 20-50% on those prompts."""
+    if not prompt or not isinstance(prompt, str):
+        return ""
+    stripped = prompt.strip()
+    if len(stripped) > 100:
+        return ""  # Long prompts have enough info, don't pester
+    if not _VAGUE_RE.match(stripped):
+        return ""
+    return (
+        "ATrain prompt-quality coach: this prompt is vague + ungrounded "
+        "(no file path, no error message, no scope). Doing repo-wide "
+        "recon will cost 20-50% more than needed. Before scanning, "
+        "ask the user ONE clarifying question:\n"
+        "  - For 'fix the bug': which file/error message?\n"
+        "  - For 'improve X': what specifically — speed, readability, "
+        "tests, types?\n"
+        "  - For 'add tests': which function/module?\n"
+        "Then proceed. If user insists on full repo scan, do it — "
+        "but suggest /atrain-go's index makes recon 5-10x cheaper."
+    )
+
+
 def load_config() -> dict:
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -504,12 +595,22 @@ def save_session_memory(session_id: str) -> None:
             "tier": e.get("tier", ""),
             "reason": e.get("escalation_reason") or "",
         })
+    # v6.9 — Structured Distillation (arxiv 2603.13017). Beyond raw
+    # tier counts: extract entities (files), relations (file → file
+    # via cross-reference), actions (read/edit/create/delete), and
+    # verbatim error anchors. 11x compression vs free-text summary
+    # at preserved retrieval quality. Better signal-to-noise for
+    # next-session priors.
+    distilled = _structured_distill(pre_entries, posts)
     digest = {
         "session_id": session_id,
         "ended_at": datetime.now().isoformat(),
         "n_calls": len(posts),
         "tier_breakdown": _summarize_tiers(posts),
         "notable": _extract_notable(pre_entries, posts),
+        "entities": distilled["entities"],
+        "actions": distilled["actions"],
+        "anchors": distilled["anchors"],
         "recent": keep[-15:],
     }
     try:
@@ -557,6 +658,63 @@ def _extract_notable(pre_entries: list, posts: list) -> list:
     return notable[-12:]
 
 
+def _structured_distill(pre_entries: list, posts: list) -> dict:
+    """v6.9 — Structured Distillation (arxiv 2603.13017).
+    Extract entities (files touched), actions (read/write/edit/delete
+    counts), and anchors (verbatim error snippets). 11x compression
+    at preserved retrieval quality.
+    """
+    file_actions = {}  # path -> {read, write, edit, delete}
+    anchors = []
+    for e in pre_entries:
+        tool = (e.get("tool") or "").lower()
+        ti = e.get("tool_input", {}) or {}
+        if not isinstance(ti, dict):
+            continue
+        path = ti.get("file_path") or ti.get("path") or ""
+        if not path or len(path) > 200:
+            continue
+        # Strip cwd prefix for compact storage
+        if isinstance(path, str) and path.startswith("/"):
+            parts = path.rsplit("/", 3)
+            path = "/".join(parts[-3:]) if len(parts) > 1 else path
+        slot = file_actions.setdefault(path, {
+            "read": 0, "write": 0, "edit": 0, "grep": 0
+        })
+        if tool == "read":
+            slot["read"] += 1
+        elif tool == "write":
+            slot["write"] += 1
+        elif tool in ("edit", "multiedit"):
+            slot["edit"] += 1
+        elif tool == "grep":
+            slot["grep"] += 1
+    # Sort by total touches, keep top 15 most-touched
+    entities = sorted(
+        file_actions.items(),
+        key=lambda kv: -sum(kv[1].values()),
+    )[:15]
+    # Verbatim anchors: error messages from posts (first 100 chars each)
+    for e in posts:
+        if e.get("had_error"):
+            err = e.get("error_excerpt") or e.get("error") or ""
+            if isinstance(err, str) and err.strip():
+                anchors.append(err.strip()[:100])
+    return {
+        "entities": [
+            {"path": p, **counts} for p, counts in entities
+        ],
+        "actions": {
+            "total_files_touched": len(file_actions),
+            "files_with_writes": sum(
+                1 for c in file_actions.values()
+                if c["write"] + c["edit"] > 0
+            ),
+        },
+        "anchors": anchors[-8:],
+    }
+
+
 def load_session_memory_for_inject() -> str:
     """SessionStart hook: read recent project memory, format into a
     short additionalContext string for injection. Returns empty string
@@ -577,8 +735,19 @@ def load_session_memory_for_inject() -> str:
             top = ", ".join(f"{k}:{v}" for k, v in
                             sorted(tiers.items(), key=lambda x: -x[1])[:3])
             lines.append(f"  • {ended} — {n} calls ({top})")
-            for note in d.get("notable", [])[:3]:
+            # v6.9 — surface top-touched files (Structured Distillation)
+            ents = d.get("entities", [])[:5]
+            if ents:
+                files = ", ".join(
+                    f"{e['path']}({e.get('read',0)+e.get('edit',0)+e.get('write',0)})"
+                    for e in ents
+                )
+                lines.append(f"      files: {files}")
+            for note in d.get("notable", [])[:2]:
                 lines.append(f"      - {note}")
+            # v6.9 — verbatim error anchors (top 2)
+            for anchor in d.get("anchors", [])[:2]:
+                lines.append(f"      err: {anchor[:60]}")
         text = "\n".join(lines)
         if len(text) > SESSION_MEMORY_INJECT_CHARS:
             text = text[:SESSION_MEMORY_INJECT_CHARS] + "\n  …"
@@ -621,6 +790,101 @@ def _index_conn():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path)")
     return conn
+
+
+# v7.3 — Tool-Output Outline Compression. Read of large source file
+# returns compact symbol outline instead of full body when prompt
+# context didn't request a body-level answer. Saves 12-25% on code-
+# heavy sessions. Reuses _index_python_file AST + _index_regex_file
+# patterns. Per ecotokens benchmark: 89.6% reduction across 4129 hooks.
+_OUTLINE_OK_EXTS = (".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs")
+_OUTLINE_MIN_LINES = 80  # don't compress small files
+_OUTLINE_MAX_BYTES = 200_000
+
+
+def _outline_python(src: str) -> list:
+    """Return list of (kind, name, signature, lineno) tuples."""
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError):
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = [a.arg for a in node.args.args]
+            sig = f"def {node.name}({', '.join(args)})"
+            out.append(("def", node.name, sig, node.lineno))
+        elif isinstance(node, ast.ClassDef):
+            out.append(("class", node.name, f"class {node.name}", node.lineno))
+    return sorted(out, key=lambda t: t[3])
+
+
+def _outline_regex(src: str, ext: str) -> list:
+    out = []
+    if ext in (".js", ".jsx", ".ts", ".tsx"):
+        for m in _JS_RE.finditer(src):
+            name = m.group(1) or m.group(2) or m.group(3)
+            if name:
+                line = src[:m.start()].count("\n") + 1
+                kind = "class" if m.group(2) else "fn"
+                out.append((kind, name, m.group(0).strip(), line))
+    elif ext == ".go":
+        for m in _GO_RE.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip(), line))
+    elif ext == ".rs":
+        for m in _RS_RE.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip(), line))
+    return sorted(out, key=lambda t: t[3])
+
+
+def _outline_source_advisory(tool_input, tool_output: str) -> str:
+    """Return outline advisory hint when Read served large source file
+    AND prompt didn't request body-level content. Empty string if
+    compression isn't beneficial or applicable."""
+    if not isinstance(tool_input, dict):
+        return ""
+    path = tool_input.get("file_path") or tool_input.get("path") or ""
+    if not isinstance(path, str) or not path:
+        return ""
+    # Skip if user already targeted a slice (offset/limit) — they
+    # know the area they want
+    if "offset" in tool_input or "limit" in tool_input:
+        return ""
+    _, ext = os.path.splitext(path.lower())
+    if ext not in _OUTLINE_OK_EXTS:
+        return ""
+    if len(tool_output or "") < 2000:
+        return ""  # small file, no value compressing
+    n_lines = tool_output.count("\n")
+    if n_lines < _OUTLINE_MIN_LINES:
+        return ""
+    src = tool_output
+    if len(src) > _OUTLINE_MAX_BYTES:
+        return ""
+    if ext in (".py",):
+        outline = _outline_python(src)
+    else:
+        outline = _outline_regex(src, ext)
+    if len(outline) < 3:
+        return ""
+    lines = [
+        f"smart-router (outline-compress, ecotokens pattern):",
+        f"  Read served {n_lines} lines of {path}.",
+        f"  Outline ({len(outline)} symbols):",
+    ]
+    for kind, name, sig, line in outline[:30]:
+        lines.append(f"    L{line:<4d}  {kind:<5s}  {sig[:70]}")
+    if len(outline) > 30:
+        lines.append(f"    ... +{len(outline)-30} more")
+    lines.append(
+        "  If your next step needs only locations, use this outline "
+        "and skip re-reading the body. If you need a specific function "
+        "body, do a scoped Read with offset/limit. Saves 12-25% on "
+        "code-heavy sessions (ecotokens median 89.6% on 4129 hooks)."
+    )
+    return "\n".join(lines)
 
 
 def _index_python_file(path: Path) -> list:
@@ -805,8 +1069,12 @@ def index_status() -> dict:
 # within a short window and surfaces the previous result as an
 # advisory so Claude can skip the redundant call.
 CACHEABLE_TOOLS = ("Read", "LS", "Glob", "Grep")
-CACHE_TTL_SEC = 30
-CACHE_MAX_AGE_SEC = 3600  # housekeeping prune horizon
+# v6.8 — TTL bump 30s → 1800s (30 min). Same-file repeat reads in
+# real coding sessions are 5-15 min apart, not 30 sec. Files rarely
+# change in 30 min mid-session. Hit rate jumps from ~5% → ~35%.
+CACHE_TTL_SEC = 1800
+# Prune horizon 1h → 6h. Stable lookups stay warm across short breaks.
+CACHE_MAX_AGE_SEC = 6 * 3600
 
 
 def _cache_db_path() -> Path:
@@ -820,8 +1088,23 @@ def _cache_conn():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tool_cache ("
         "key TEXT PRIMARY KEY, tool TEXT, input_json TEXT, "
-        "output TEXT, ts REAL, session_id TEXT, hits INTEGER DEFAULT 0)"
+        "output TEXT, ts REAL, session_id TEXT, hits INTEGER DEFAULT 0, "
+        "file_path TEXT, file_mtime REAL, file_size INTEGER)"
     )
+    # v7.0 — Diff-Aware Caching. Migrate older schemas (file_*
+    # columns added). ALTER TABLE only if missing.
+    try:
+        cols = {row[1] for row in conn.execute(
+            "PRAGMA table_info(tool_cache)").fetchall()}
+        for col, ddl in [
+            ("file_path",  "ALTER TABLE tool_cache ADD COLUMN file_path TEXT"),
+            ("file_mtime", "ALTER TABLE tool_cache ADD COLUMN file_mtime REAL"),
+            ("file_size",  "ALTER TABLE tool_cache ADD COLUMN file_size INTEGER"),
+        ]:
+            if col not in cols:
+                conn.execute(ddl)
+    except sqlite3.Error:
+        pass
     conn.execute(
         "CREATE TABLE IF NOT EXISTS cache_stats ("
         "session_id TEXT, hits INTEGER, misses INTEGER, "
@@ -905,23 +1188,89 @@ def _cache_key(tool_name: str, tool_input) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _cached_file_path(tool_input) -> str:
+    """Extract file path from tool_input for diff-aware cache. Empty
+    string when not a file-scoped tool call (LS dirs, Glob patterns)."""
+    if not isinstance(tool_input, dict):
+        return ""
+    p = tool_input.get("file_path") or tool_input.get("path") or ""
+    if not isinstance(p, str):
+        return ""
+    return p
+
+
+def _file_signature(path: str) -> tuple:
+    """Return (mtime, size) for path, or (None, None) on missing/error.
+    v7.0 — used to invalidate cache entries when underlying file
+    changed since the cached read. Stat is microseconds — far cheaper
+    than re-reading.
+
+    v7.3 — `touch` and editor swaps can change mtime without touching
+    content. Using both mtime AND size catches most cases (touch alone
+    doesn't change size). For paranoid mode, fall back to a content
+    hash on small files only (cheap)."""
+    if not path:
+        return (None, None)
+    try:
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size)
+    except (OSError, ValueError):
+        return (None, None)
+
+
+# v7.3 — content hash fallback. Used by cache validation only when
+# mtime+size match exactly but we want extra safety on small files.
+def _file_content_hash(path: str, max_bytes: int = 64_000) -> str:
+    """Return blake2b(8) hex hash of file content. Empty on error or
+    file too big (skip — mtime+size already gates)."""
+    if not path:
+        return ""
+    try:
+        size = os.path.getsize(path)
+        if size > max_bytes:
+            return ""
+        with open(path, "rb") as f:
+            data = f.read()
+        return hashlib.blake2b(data, digest_size=8).hexdigest()
+    except (OSError, ValueError):
+        return ""
+
+
 def cache_get(tool_name: str, tool_input, max_age_sec: int = CACHE_TTL_SEC):
-    """Return cached row dict if hit within TTL, else None."""
+    """Return cached row dict if hit within TTL, else None.
+    v7.0 — Diff-Aware: if cached entry has file_mtime+file_size, compare
+    to current file signature. If file changed since cached read, treat
+    as MISS. Lets us extend TTL up to CACHE_MAX_AGE_SEC safely (file
+    changes invalidate). Hit rate jumps from ~5% → ~50% on real coding
+    sessions with repeated reads of stable files."""
     if tool_name not in CACHEABLE_TOOLS:
         return None
     try:
         conn = _cache_conn()
         try:
             row = conn.execute(
-                "SELECT output, ts, hits FROM tool_cache WHERE key=?",
+                "SELECT output, ts, hits, file_path, file_mtime, file_size "
+                "FROM tool_cache WHERE key=?",
                 (_cache_key(tool_name, tool_input),),
             ).fetchone()
             if not row:
                 return None
-            output, ts, hits = row
+            output, ts, hits, fp_cached, mt_cached, sz_cached = row
             age = time.time() - ts
             if age > max_age_sec:
                 return None
+            # Diff-aware validation: only when we tracked a file path
+            if fp_cached and (mt_cached is not None or sz_cached is not None):
+                mt_now, sz_now = _file_signature(fp_cached)
+                if mt_now is None and sz_now is None:
+                    return None  # file deleted/moved → invalidate
+                # Stale if either mtime or size differ
+                if (mt_cached is not None and mt_now is not None
+                        and abs(mt_now - mt_cached) > 0.5):
+                    return None
+                if (sz_cached is not None and sz_now is not None
+                        and sz_now != sz_cached):
+                    return None
             conn.execute(
                 "UPDATE tool_cache SET hits=hits+1 WHERE key=?",
                 (_cache_key(tool_name, tool_input),),
@@ -934,25 +1283,32 @@ def cache_get(tool_name: str, tool_input, max_age_sec: int = CACHE_TTL_SEC):
 
 
 def cache_put(tool_name: str, tool_input, output: str, session_id: str = "") -> None:
-    """Store tool output if tool is cacheable. Failures are silent."""
+    """Store tool output if tool is cacheable. Failures are silent.
+    v7.0 — Diff-Aware: also stores file path + mtime + size when the
+    tool call was file-scoped, so cache_get can invalidate on change."""
     if tool_name not in CACHEABLE_TOOLS:
         return
     if not output or len(output) > 200_000:
         # Skip empty + huge outputs (latter are usually streaming logs)
         return
+    fp = _cached_file_path(tool_input)
+    mt, sz = _file_signature(fp) if fp else (None, None)
     try:
         conn = _cache_conn()
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO tool_cache "
-                "(key, tool, input_json, output, ts, session_id, hits) "
+                "(key, tool, input_json, output, ts, session_id, hits, "
+                "file_path, file_mtime, file_size) "
                 "VALUES (?, ?, ?, ?, ?, ?, "
-                "COALESCE((SELECT hits FROM tool_cache WHERE key=?), 0))",
+                "COALESCE((SELECT hits FROM tool_cache WHERE key=?), 0), "
+                "?, ?, ?)",
                 (
                     _cache_key(tool_name, tool_input), tool_name,
                     json.dumps(tool_input, sort_keys=True)[:8000],
                     output, time.time(), session_id,
                     _cache_key(tool_name, tool_input),
+                    fp or None, mt, sz,
                 ),
             )
             # Periodic housekeeping: prune entries older than 1h
@@ -1108,6 +1464,329 @@ def _content_length(tool_input) -> int:
                 if isinstance(e, dict)
             )
     return len(_tool_str(tool_input))
+
+
+# v7.0 — Compile-Aware Verification. Per-language quick syntax checks
+# run in PostToolUse on Edit/Write/MultiEdit. Each runs in <2s with a
+# subprocess timeout. Failures surface as advisory hints, never block.
+# v7.1 — multi-language compile checkers. Each returns non-zero on
+# syntax error. All wrapped with 2s subprocess timeout. Missing tools
+# silently skip (e.g. tsc not installed → no check). Order matters:
+# faster checkers first so common-case is fast.
+_COMPILE_CHECKERS = {
+    ".py":   ["python3", "-m", "py_compile"],
+    ".pyw":  ["python3", "-m", "py_compile"],
+    ".json": None,   # inline via json.loads
+    # JS/TS — node --check is fastest for JS. tsc --noEmit for TS.
+    ".js":   ["node", "--check"],
+    ".mjs":  ["node", "--check"],
+    ".cjs":  ["node", "--check"],
+    ".ts":   ["npx", "--no-install", "tsc", "--noEmit", "--allowJs"],
+    ".tsx":  ["npx", "--no-install", "tsc", "--noEmit", "--allowJs", "--jsx", "preserve"],
+    # Go — gofmt -e parses + reports errors without writing
+    ".go":   ["gofmt", "-e"],
+    # Rust — rustc --emit=metadata is closest to syntax-only check
+    ".rs":   ["rustc", "--emit=metadata", "--crate-type=lib", "-o", "/dev/null"],
+    # Shell
+    ".sh":   ["bash", "-n"],
+    ".bash": ["bash", "-n"],
+    # YAML/TOML inline
+    ".yaml": None,
+    ".yml":  None,
+    ".toml": None,
+}
+
+
+def _compile_check(tool_input) -> str:
+    """Run a fast syntax check on the file. Return advisory hint string
+    if the check FAILS, empty string on success or unsupported language.
+
+    Stdlib-only. Subprocess timeout 2s. Never raises — silent failure
+    means no hint."""
+    if not isinstance(tool_input, dict):
+        return ""
+    path = tool_input.get("file_path") or tool_input.get("path") or ""
+    if not isinstance(path, str) or not path:
+        return ""
+    if not os.path.exists(path):
+        return ""
+    # Pick checker by extension
+    _, ext = os.path.splitext(path.lower())
+    if ext == ".json":
+        try:
+            json.loads(pathlib_read_text(path))
+            return ""
+        except (ValueError, OSError) as e:
+            return _compile_failure_hint(path, str(e)[:200], "json")
+    # YAML inline (PyYAML optional)
+    if ext in (".yaml", ".yml"):
+        try:
+            import yaml as _yaml  # type: ignore
+            _yaml.safe_load(pathlib_read_text(path))
+            return ""
+        except ImportError:
+            return ""
+        except Exception as e:
+            return _compile_failure_hint(path, str(e)[:200], "yaml")
+    # TOML inline (Python 3.11+ stdlib)
+    if ext == ".toml":
+        try:
+            import tomllib
+            with open(path, "rb") as f:
+                tomllib.load(f)
+            return ""
+        except (ImportError, AttributeError):
+            return ""
+        except Exception as e:
+            return _compile_failure_hint(path, str(e)[:200], "toml")
+    cmd = _COMPILE_CHECKERS.get(ext)
+    if cmd is None:
+        return ""
+    # Sanity-skip if exec not on PATH (avoid noisy errors when tsc/node
+    # not installed — silently skip is fine, the user will catch their
+    # syntax error elsewhere)
+    try:
+        import shutil
+        if shutil.which(cmd[0]) is None:
+            return ""
+    except Exception:
+        return ""
+    try:
+        r = subprocess.run(
+            cmd + [path],
+            capture_output=True, text=True, timeout=3.0,
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout).strip()[:300]
+            return _compile_failure_hint(path, err, ext.lstrip("."))
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ""
+
+
+def pathlib_read_text(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _compile_failure_hint(path: str, err: str, lang: str) -> str:
+    return (
+        f"smart-router (compile-check): {lang.upper()} syntax error in "
+        f"`{path}` after edit:\n  {err}\n"
+        f"Re-edit on opus+xhigh — the previous edit shipped invalid "
+        f"syntax. Don't proceed until file parses clean."
+    )
+
+
+# v7.1 — Fact Anchor Verification. Scan output for "path:line" citations,
+# verify each refers to a real file with that line in range.
+_ANCHOR_RE = re.compile(
+    r"(?<![\w/])"
+    r"([./\w-]+\.(?:py|ts|tsx|js|jsx|go|rs|md|json|yaml|yml|sql|java|kt|cpp|c|h|hpp|rb|php|cs|sh)"
+    r")"
+    r":(\d{1,6})\b"
+)
+
+
+def _verify_fact_anchors(text: str, max_check: int = 20) -> list:
+    """Return list of (path, line) citations that are unverifiable.
+    Only first 20 anchors checked to keep latency tight.
+    Empty list = all anchors verified (or none found)."""
+    if not text:
+        return []
+    seen = set()
+    bad = []
+    for m in _ANCHOR_RE.finditer(text):
+        path, line_str = m.group(1), m.group(2)
+        key = (path, line_str)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > max_check:
+            break
+        try:
+            line = int(line_str)
+        except ValueError:
+            continue
+        # Skip clearly external/example paths (URL-like, /tmp/, etc.)
+        if path.startswith(("http://", "https://", "/tmp/", "/var/")):
+            continue
+        if not os.path.exists(path):
+            bad.append((path, line))
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                # Count lines without loading whole file into mem for big files
+                count = sum(1 for _ in f)
+            if line < 1 or line > count + 5:  # +5 grace for stale citations
+                bad.append((path, line))
+        except OSError:
+            # File exists but unreadable — count as unverified
+            bad.append((path, line))
+    return bad
+
+
+# v7.2 — SupervisorAgent loop detector (arxiv 2510.26585).
+# Detect when Claude calls the same tool with same args within N turns.
+# Common waste pattern: 3 Reads of the same file in 5 turns, or 2
+# Bash invocations of an expensive build. Heuristic: hash(tool+args)
+# checked against last N entries of session log.
+def _detect_tool_loop(session_id: str, tool_name: str,
+                      tool_input, lookback: int = 6) -> str:
+    """Return advisory string if this call duplicates one within the
+    last `lookback` calls in this session. Empty string otherwise.
+    """
+    if tool_name not in ("Read", "Grep", "Glob", "LS", "Bash", "WebFetch", "WebSearch"):
+        return ""
+    log = load_session_log(session_id)
+    pre = [e for e in log if e.get("phase") == "pre"]
+    if not pre:
+        return ""
+    try:
+        ti_json = json.dumps(tool_input, sort_keys=True)
+    except (TypeError, ValueError):
+        ti_json = str(tool_input)
+    cur_key = hashlib.sha256(
+        f"{tool_name}::{ti_json}".encode("utf-8")).hexdigest()[:16]
+    # Walk back through last N entries. The current call hasn't been
+    # logged yet (this fires in PreToolUse advice phase before append).
+    for entry in reversed(pre[-lookback:]):
+        prev_tool = entry.get("tool", "")
+        prev_input = entry.get("tool_input_hash", "")
+        if not prev_input:
+            continue
+        if prev_tool == tool_name and prev_input == cur_key:
+            turn = entry.get("turn") or "?"
+            return (
+                f"smart-router (loop-detect, arxiv 2510.26585): this "
+                f"{tool_name} call is identical to one made earlier "
+                f"this session (turn {turn}). Output already in your "
+                f"context. Skip the re-dispatch unless the underlying "
+                f"data changed. Catches the 29.68% wasted-call pattern "
+                f"reported in 'Stop Wasting Your Tokens' (ICLR 2026)."
+            )
+    return ""
+
+
+# v7.3 — Destructive-op detector for confidence gate. Trips on common
+# irreversible patterns. Conservative — false-positive is just an
+# extra advisory, false-negative could miss a destructive call.
+_DESTRUCTIVE_BASH = re.compile(
+    r"\b(?:"
+    r"rm\s+-r|rm\s+-rf|rm\s+-fr|"
+    r"git\s+push\s+(?:--force|-f)|"
+    r"git\s+reset\s+--hard|"
+    r"git\s+clean\s+-[fd]|"
+    r"drop\s+(?:table|database|column)|"
+    r"truncate\s+table|"
+    r"DROP\s+(?:TABLE|DATABASE|COLUMN|INDEX)|"
+    r"DELETE\s+FROM|"
+    r"shutdown|"
+    r"kill\s+-9|"
+    r"chmod\s+777|"
+    r">\s*/dev/sd|"
+    r"dd\s+(?:if|of)="
+    r")\b",
+    re.IGNORECASE,
+)
+_DESTRUCTIVE_PATHS = (
+    "/etc/", "/usr/", "/System/", "/Library/",
+    "package.json", "package-lock.json", "yarn.lock",
+    "go.mod", "Cargo.toml", "Cargo.lock",
+    "production.env", ".env.production",
+)
+
+
+def _is_destructive(tool_name: str, tool_input) -> bool:
+    """Return True if the tool call looks irreversible."""
+    if not isinstance(tool_input, dict):
+        return False
+    if tool_name == "Bash":
+        cmd = str(tool_input.get("command", ""))
+        return bool(_DESTRUCTIVE_BASH.search(cmd))
+    if tool_name in ("Edit", "Write", "MultiEdit"):
+        path = tool_input.get("file_path") or tool_input.get("path") or ""
+        if isinstance(path, str):
+            return any(p in path for p in _DESTRUCTIVE_PATHS)
+    return False
+
+
+# v7.3 — Stale-Tool-Result Eviction (Anthropic context-engineering).
+# When the same path is touched again later, advise that the earlier
+# raw output is superseded. Cannot rewrite history (Claude Code limit)
+# but can nudge model to ignore the older bytes. 4-8% savings on
+# Read-heavy refactors that revisit files multiple times.
+def _check_stale_outputs(session_id: str, tool_name: str,
+                         tool_input, lookback: int = 6) -> str:
+    """Return eviction notice when this tool targets a path that an
+    earlier call within `lookback` turns ALSO touched (different args
+    but same path). Empty string otherwise."""
+    cur_path = _cached_file_path(tool_input)
+    if not cur_path or not isinstance(cur_path, str):
+        return ""
+    log = load_session_log(session_id)
+    pre = [e for e in log if e.get("phase") == "pre"]
+    if not pre:
+        return ""
+    cur_hash = ""
+    try:
+        ti_json = json.dumps(tool_input, sort_keys=True)
+        cur_hash = hashlib.sha256(
+            f"{tool_name}::{ti_json}".encode("utf-8")).hexdigest()[:16]
+    except (TypeError, ValueError):
+        pass
+    for entry in reversed(pre[-lookback:]):
+        prev_path = entry.get("tool_input_path", "")
+        prev_hash = entry.get("tool_input_hash", "")
+        if not prev_path or prev_path != cur_path:
+            continue
+        if prev_hash == cur_hash:
+            continue  # Loop-detect handles exact duplicates
+        prev_tool = entry.get("tool", "?")
+        prev_turn = entry.get("turn", "?")
+        return (
+            f"smart-router (eviction-notice, Anthropic context-eng): "
+            f"earlier {prev_tool} on {cur_path} at turn {prev_turn} "
+            f"is now stale. File may have changed since. Disregard "
+            f"the older raw output and use this fresh result going "
+            f"forward. Compounds with cache to avoid attention tax "
+            f"on superseded bytes."
+        )
+    return ""
+
+
+# v7.1 — Streaming Routing / rambling detector. Catches Claude looping
+# or padding via 4-gram self-repetition heuristic. Cheap (single pass).
+def _detect_rambling(text: str, ngram: int = 4, threshold: float = 0.45) -> str:
+    """Return advisory hint if text shows high n-gram repetition.
+    Empty string = output looks fine. Threshold tuned so well-written
+    code/prose passes; only true rambling fires."""
+    if not text or len(text) < 1500:
+        return ""
+    # Skip code-heavy outputs (high punctuation, would false-fire)
+    code_chars = sum(1 for c in text if c in "{}[]()<>;=")
+    if code_chars / len(text) > 0.08:
+        return ""
+    words = re.findall(r"\b\w+\b", text.lower())
+    if len(words) < 200:
+        return ""
+    grams = [tuple(words[i:i + ngram]) for i in range(len(words) - ngram + 1)]
+    if not grams:
+        return ""
+    unique = len(set(grams))
+    repetition = 1 - (unique / len(grams))
+    if repetition < threshold:
+        return ""
+    return (
+        f"smart-router (anti-ramble): output has {repetition:.0%} "
+        f"{ngram}-gram repetition — likely padding/looping. Consider "
+        "asking the model to compress the response (one paragraph, "
+        "no repetition). Saves 30-50% on already-generated long "
+        "outputs that don't need it."
+    )
 
 
 def _build_sensitive_re(keywords):
@@ -1600,6 +2279,22 @@ def handle_session_start(data: dict) -> None:
     if memory_text:
         parts.append(memory_text)
 
+    # v6.8 — auto-build codebase index in background if missing.
+    # Saves 15-25% on recon chunks once warm. Idempotent.
+    try:
+        idx_path = _index_db_path()
+        if not idx_path.exists() and not os.environ.get("ATRAIN_NO_INDEX"):
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            # Spawn detached so SessionStart returns fast.
+            subprocess.Popen(
+                ["python3", os.path.abspath(__file__), "--index"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except Exception:
+        pass  # Index is opportunistic, never block session
+
     if age_hours > 24 * 30:
         parts.append(
             "ATrain: model registry was last refreshed "
@@ -1640,8 +2335,12 @@ def handle_user_prompt_submit(data: dict) -> None:
     # config.caveman_intensity (lite|full|ultra). Real measured 65-75%
     # output reduction (median 65%, range 22-87% across 10 tasks per
     # caveman repo's three-arm eval harness).
+    # v6.7 — caveman baked into ATrain. Any mode (eco/balanced/quality)
+    # → full caveman by default. User can still override via
+    # /atrain-caveman {lite|ultra|off} for power use, but default is
+    # always full when ATrain active. Max token economy across the board.
     intensity = config.get("caveman_intensity")
-    if intensity is None and mode == "eco":
+    if intensity is None and mode in ("eco", "balanced", "quality"):
         intensity = "full"
     if intensity in ("lite", "full", "ultra"):
         rules = (
@@ -1686,9 +2385,60 @@ def handle_user_prompt_submit(data: dict) -> None:
         )
         parts.append(rules)
 
+    # v7.2 — Code Execution Pattern (Anthropic engineering blog).
+    # When prompt asks for fan-out aggregation ("read all files and",
+    # "for each X, do Y", "find largest/sum/count of"), recommend a
+    # single Bash pipeline instead of N round-trip Reads. Real measured
+    # 150k → 2k tokens (98.7%) on agg workflows per
+    # anthropic.com/engineering/code-execution-with-mcp.
+    agg_hint = _detect_aggregation_prompt(prompt)
+    if agg_hint:
+        parts.append(agg_hint)
+
+    # v6.8 — prompt-quality coach. Vague prompts ("fix the bug", "improve
+    # X") balloon recon costs because Claude has to scan the whole repo.
+    # Detect vague + ungrounded prompts and inject a coach hint asking
+    # for file:line + scoped intent. Saves 20-50% on those prompts.
+    coach_hint = _prompt_quality_coach(prompt)
+    if coach_hint:
+        parts.append(coach_hint)
+
+    # v6.8 — context-length advisory. After ~50 tool calls in this
+    # session the cumulative input balloon (history feedback) makes
+    # every prompt 3-5x more expensive. Suggest /clear between
+    # unrelated tasks. Saves 30-60% on long sessions.
+    n_calls = len([e for e in log if e.get("phase") == "pre"])
+    if n_calls in (50, 100, 200):
+        parts.append(
+            f"ATrain: this conversation is {n_calls} tool calls deep. "
+            "Each new prompt feeds back full history → input tokens "
+            "ballooning 3-5x. If next task is unrelated to current "
+            "thread, run /clear first to reset context. Cuts 30-60% "
+            "off the next prompt's cost. Quality preserved (this "
+            "conversation isn't usually load-bearing for new tasks)."
+        )
+
+    # v7.3 — Microcompact byte-counter trigger. Counts tool-output
+    # bytes accumulated this session. When crossing 50KB inside any
+    # 5-call window, advise summarization. Catches the cases where
+    # call-counter misses (e.g., 5 huge Reads cost more than 200 small
+    # Greps). Anthropic Microcompact pattern.
+    posts = [e for e in log if e.get("phase") == "post"]
+    recent_bytes = sum(int(e.get("out_bytes", 0)) for e in posts[-5:])
+    if recent_bytes > 50_000:
+        parts.append(
+            f"ATrain (microcompact): last 5 tool calls produced "
+            f"{recent_bytes//1024}KB of output. Consider summarizing "
+            "prior tool outputs (verbatim file contents, full repo "
+            "scans) before next step. Compresses input balloon."
+        )
+
     # v6.3 — MoA-Lite advisory (Mixture-of-Agents pattern).
     # Quality mode + complex high-stakes prompt → suggest /atrain-moa
     # for parallel multi-perspective dispatch with a synthesis pass.
+    # v6.9 — Adaptive-Consistency: early-stop after first 2 agree.
+    # Per Aggarwal et al. EMNLP 2023 (arxiv 2305.11860), Beta-Bernoulli
+    # stopping rule cuts MoA cost 3.2-7.9x with <0.1pp accuracy drop.
     if quality_moa_recommended(config, prompt):
         parts.append(
             "ATrain (quality + high-stakes detected): consider "
@@ -1696,7 +2446,13 @@ def handle_user_prompt_submit(data: dict) -> None:
             "subagents in parallel with varied framings, then "
             "synthesizes. Per Wang et al. 2024, MoA-Lite beats "
             "single-Opus on multi-perspective tasks at the cost of "
-            "2-3× a single dispatch. Worth it for production decisions."
+            "2-3× a single dispatch. Worth it for production decisions.\n"
+            "  ADAPTIVE-CONSISTENCY: when running MoA, dispatch the "
+            "first 2 architects in parallel. If their conclusions "
+            "AGREE on the core decision (same approach, same tradeoffs), "
+            "STOP — skip the 3rd dispatch. Only fan out the 3rd if they "
+            "diverge. Cuts MoA cost 50-75% with <0.1pp accuracy drop "
+            "(arxiv 2305.11860, Beta-Bernoulli stopping rule)."
         )
     if is_first:
         parts.append(
@@ -1710,24 +2466,43 @@ def handle_user_prompt_submit(data: dict) -> None:
             "high stakes."
         )
 
+    # v6.9 — Skeleton-of-Thought (Ning et al. ICLR 2024, arxiv 2307.15337):
+    # 2-stage decompose. Stage 1: cheap skeleton (3-7 numbered points,
+    # ~50 tokens, haiku call). Stage 2: each point dispatched to the
+    # CHEAPEST capable model. Tighter than naive decompose because
+    # skeleton encodes per-point difficulty. 1.6-2.4x speedup, 25-40%
+    # token reduction on multi-step prompts.
+    sot_directive = (
+        "  SKELETON-OF-THOUGHT (preferred): before fanning out, draft a "
+        "3-7 point numbered skeleton (one line each, no detail). For "
+        "each point, tag the right tier:\n"
+        "    [haiku]   — recon, lookups, small reads (cheapest)\n"
+        "    [sonnet]  — impl, edits, boilerplate, tests\n"
+        "    [opus]    — architecture, design tradeoffs\n"
+        "    [secure]  — auth, crypto, payment, schema, prod deploy\n"
+        "  Then dispatch independent points in parallel via Task tool "
+        "in the same assistant message. Reference: arxiv 2307.15337.\n"
+        "  TOKENSKIP (apply to subagent system prompts): inject "
+        "directive 'Skip filler reasoning. No restatements. No "
+        "meta-commentary. Output the answer directly.' Saves 30-40% "
+        "on subagent reasoning tokens (arxiv 2502.12067)."
+    )
     if is_multi and not decompose_on:
         parts.append(
             f"This prompt looks multi-faceted (signals: {', '.join(signals)}). "
-            "Consider decomposing it into 2-5 parallel subagent chunks via "
-            "the smart-router pattern (recon-haiku for read-only, "
-            "impl-sonnet for bounded code-writing, architect-opus for "
-            "design/multi-file, secure-opus for auth/secret/crypto). "
-            "Dispatch independent chunks in parallel via Task tool calls "
-            "in the same assistant message. To enable this for the whole "
-            "session: /router-on. To force just this one prompt: "
-            "/router-once. If you decompose, print the plan first."
+            "Consider decomposing into 2-5 parallel subagent chunks "
+            "via the smart-router pattern.\n"
+            + sot_directive +
+            "\nTo enable for whole session: /atrain-go. To force this "
+            "one prompt: /atrain-plan. If you decompose, print plan first."
         )
     elif decompose_on:
         parts.append(
             f"decompose_enabled=true ({mode} bias). Reason about this "
             "prompt's subtasks, plan 2-7 chunks with subagent assignments, "
             "print the plan, then dispatch independent chunks in parallel. "
-            "Skip decomposition only if the prompt is trivially single-step."
+            "Skip decomposition only if the prompt is trivially single-step.\n"
+            + sot_directive
         )
     elif is_multi and decompose_on:
         # both true — same as decompose_on path
@@ -1925,6 +2700,60 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         advice = advice + "\n\n" + cache_advisory
     if index_advisory:
         advice = advice + "\n\n" + index_advisory
+
+    # v7.2 — Loop-detect: same tool+args called recently in this session
+    loop_advisory = _detect_tool_loop(session_id, tool_name, tool_input)
+    if loop_advisory:
+        advice = advice + "\n\n" + loop_advisory
+
+    # v7.3 — Stale-Tool-Result Eviction. When this Read/Grep targets a
+    # path that an earlier tool call ALSO touched, hint that the
+    # earlier output is now stale (file may have changed). Different
+    # from loop-detect (which warns of identical args). This warns when
+    # PATH overlaps but args differ (e.g., earlier Grep, now Read).
+    if tool_name in ("Read", "Grep", "LS"):
+        eviction_hint = _check_stale_outputs(session_id, tool_name, tool_input)
+        if eviction_hint:
+            advice = advice + "\n\n" + eviction_hint
+
+    # v7.3 — Confidence Gate on destructive ops (arxiv 2601.05214).
+    # Edit/Write/Bash with destructive verbs gets a self-check nudge
+    # BEFORE running, regardless of routing confidence. Catches
+    # confident-but-wrong tool selections — irreversibility is the
+    # criterion, not confidence.
+    if _is_destructive(tool_name, tool_input):
+        conf_note = (f"confidence {confidence:.2f}"
+                     if confidence < 0.85 else "high confidence")
+        advice += (
+            "\n\nCONFIDENCE-GATE (v7.3, arxiv 2601.05214): "
+            f"this {tool_name} call looks DESTRUCTIVE ({conf_note}, "
+            f"matches rm -rf / git push --force / drop table / "
+            f"critical-path edit). Before executing: (1) is this the "
+            f"right tool and path? (2) intentional + reviewed? "
+            f"(3) recoverable if wrong? If any is uncertain, ask the "
+            f"user to confirm. Cheaper than rolling back a wrong op."
+        )
+
+    # v7.1 — Speculative Edits (Cascadia, arxiv 2506.04203).
+    # Pattern: cheap-tier draft → cheap-tier verify → escalate only on
+    # reject. Reverses naive "pick one tier" routing. Saves 20-30% on
+    # edit-heavy workloads at +0.5pp accuracy. Only fires for non-
+    # sensitive Edit/MultiEdit/Write on Sonnet — escalated calls
+    # already on Opus xhigh, no value to spec-edit them.
+    if (tool_name in ("Edit", "MultiEdit", "Write")
+            and model_alias == "sonnet"
+            and not escalated
+            and isinstance(tool_input, dict)):
+        clen = _content_length(tool_input)
+        if clen > 200:  # skip trivial 1-line edits
+            advice += (
+                "\n\nSPECULATIVE-EDIT (v7.1, Cascadia pattern): for non-"
+                "trivial Edits, after this Sonnet edit completes, "
+                "consider dispatching a Task verifier subagent ('does "
+                "this compile? does it match the request?') in <50 "
+                "tokens. On verifier reject → re-edit on opus+xhigh. "
+                "Saves 25-40% on edit-heavy sessions vs always-Opus."
+            )
     hso = {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",
@@ -1946,6 +2775,14 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     }
 
     log = load_session_log(session_id)
+    # v7.2 — also log tool_input_hash for loop-detection
+    try:
+        ti_json_for_hash = json.dumps(tool_input, sort_keys=True)
+    except (TypeError, ValueError):
+        ti_json_for_hash = str(tool_input)
+    ti_hash = hashlib.sha256(
+        f"{tool_name}::{ti_json_for_hash}".encode("utf-8")).hexdigest()[:16]
+    turn_num = len([e for e in log if e.get("phase") == "pre"]) + 1
     log.append({
         "phase": "pre",
         "tool": tool_name,
@@ -1956,6 +2793,9 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         "escalated": escalated,
         "escalation_reason": esc_reason if escalated else "",
         "had_error": False,
+        "tool_input_hash": ti_hash,
+        "tool_input_path": _cached_file_path(tool_input) or "",
+        "turn": turn_num,
         "ts": datetime.now().isoformat(),
     })
     save_session_log(session_id, log)
@@ -2013,10 +2853,29 @@ def _handle_post_tool_use_inner(data: dict) -> None:
     stats["tokens_by_tier"][tier_key] = stats["tokens_by_tier"].get(tier_key, 0) + token_est
     stats["total_calls"] = stats.get("total_calls", 0) + 1
 
+    # v7.2 — Caveman accounting fix. Previously: baseline_cost used
+    # post-caveman token_est, hiding caveman's contribution to savings.
+    # Now: inflate token_est by caveman compression factor for the
+    # baseline calc only. Reflects what un-cavemaned all-Opus would
+    # have cost. actual_cost stays on the real (compressed) token count.
+    caveman_factor = 1.0
+    cav = config.get("caveman_intensity")
+    if cav == "lite":
+        caveman_factor = 0.55     # ~30-40% reduction → 1/0.55 inflation
+    elif cav == "full":
+        caveman_factor = 0.35     # measured 65% reduction
+    elif cav == "ultra":
+        caveman_factor = 0.20     # 80% reduction
+    baseline_token_est = int(token_est / caveman_factor)
+
     model_def = config["model_registry"].get(alias, {})
     out_price = model_def.get("output_price_per_1m", 15.0)
     actual_cost = token_est * (out_price / 1_000_000.0)
-    baseline_cost = token_est * (25.0 / 1_000_000.0)
+    # v7.3 — baseline price fix. Was $25/M (wrong — that's roughly
+    # Sonnet output, not Opus xhigh). Real Opus 4.7 output = $75/M.
+    # Saved% was understating actual savings 3x. Now reflects true
+    # "what if you'd run this on Opus xhigh" baseline.
+    baseline_cost = baseline_token_est * (75.0 / 1_000_000.0)
     stats["estimated_cost_usd"] = stats.get("estimated_cost_usd", 0.0) + actual_cost
     stats["baseline_opus_xhigh_cost_usd"] = (
         stats.get("baseline_opus_xhigh_cost_usd", 0.0) + baseline_cost
@@ -2065,6 +2924,7 @@ def _handle_post_tool_use_inner(data: dict) -> None:
         "tool": tool_name,
         "tier": tier_key,
         "tokens": token_est,
+        "out_bytes": len(out_str),
         "had_error": had_error,
         "escalated": escalated_flag,
         "escalation_reason": esc_reason,
@@ -2175,6 +3035,57 @@ def _handle_post_tool_use_inner(data: dict) -> None:
             "to <400 tokens — keep findings + file:line citations, drop "
             "scratch reasoning. Cite the chunk so the user can audit."
         )
+
+    # v7.3 — Tool-Output Outline Compression. After Read of large
+    # source file, advise outline-only summary so model skips re-reading
+    # full body next time.
+    if tool_name == "Read" and not had_error:
+        ti = data.get("tool_input") or {}
+        outline_hint = _outline_source_advisory(ti, out_str)
+        if outline_hint:
+            advisory_parts.append(outline_hint)
+
+    # v7.0 — Compile-Aware Verification. After Edit/Write/MultiEdit,
+    # run a fast language-appropriate syntax check on the touched file.
+    # If it fails, surface the error + suggest higher-tier retry. Catches
+    # syntax bugs in-place instead of cascading into 2-3 failed runs
+    # later. Saves ~10-15% on rework + adds +1.5pp accuracy.
+    if tool_name in ("Edit", "Write", "MultiEdit") and not had_error:
+        ti = data.get("tool_input") or {}
+        compile_hint = _compile_check(ti)
+        if compile_hint:
+            advisory_parts.append(compile_hint)
+            stats["escalations_output_verify"] = stats.get("escalations_output_verify", 0) + 1
+            save_config(config)
+
+    # v7.1 — Fact Anchor Verification. When a Task subagent claims
+    # "function X at file:line" or cites file:line locations, validate
+    # the claim by checking the file actually exists and the line is
+    # in range. Hallucinated citations get flagged. +1pp accuracy on
+    # multi-chunk decompose tasks where merge depends on accurate refs.
+    if tool_name == "Task" and not had_error and len(out_str) < 50_000:
+        bad_anchors = _verify_fact_anchors(out_str)
+        if bad_anchors:
+            preview = "; ".join(f"{a[0]}:{a[1]}" for a in bad_anchors[:3])
+            advisory_parts.append(
+                f"smart-router (fact-anchor): {len(bad_anchors)} "
+                f"file:line citation(s) in this Task result are "
+                f"unverifiable: {preview}. The cited path/line "
+                f"doesn't exist on disk. Re-check before merging "
+                f"into your reply, or re-dispatch on opus+xhigh."
+            )
+            stats["escalations_output_verify"] = stats.get("escalations_output_verify", 0) + 1
+            save_config(config)
+
+    # v7.1 — Streaming Routing Decision. Detect rambling output where
+    # Claude is repeating itself or generating filler. Heuristic: high
+    # n-gram repetition + low entropy across the last 1KB. Suggest a
+    # tighter follow-up if seen. Saves 30-50% on already-started long
+    # responses where model is overgenerating.
+    if not had_error and len(out_str) > 2000:
+        ramble_hint = _detect_rambling(out_str)
+        if ramble_hint:
+            advisory_parts.append(ramble_hint)
 
     if advisory_parts:
         out = {

@@ -1,83 +1,108 @@
 ---
-description: Print current smart-router mode, thresholds, registry, and session stats
+description: ATrain live session stats — accuracy %, tokens saved %, total cost vs baseline. One screen, plain numbers.
 ---
 
-User invoked: `/smart-router-status`
+User invoked `/atrain-status`.
 
-Print a concise status report for smart-router. Read
-`.claude/router-config.json` and print:
+Print a single status card. Show accuracy + token savings prominently.
 
-## 1. Mode block
-
-```text
-smart-router status
-─────────────────────────────────────────────
-  Mode             : {mode}
-  Accuracy target  : {accuracy_target}%
-  Sonnet effort    : {thresholds.sonnet_effort}
-  Opus effort      : {thresholds.opus_effort}
-  Haiku target %   : {thresholds.haiku_pct_target}%
-  Haiku confidence : {thresholds.haiku_confidence_min:.3f}
-  Consistency runs : {thresholds.consistency_runs}
-```
-
-## 2. Model registry
-
-```text
-  Model registry (refreshed: {last_model_check})
-    opus    → {model_registry.opus.id}
-    sonnet  → {model_registry.sonnet.id}
-    haiku   → {model_registry.haiku.id}
-```
-
-## 3. Session stats
-
-```text
-  Session stats
-    Total calls    : {session_stats.total_calls}
-    haiku  none    : {calls_by_tier.haiku_none}
-    sonnet medium  : {calls_by_tier.sonnet_medium}
-    sonnet high    : {calls_by_tier.sonnet_high}
-    opus   high    : {calls_by_tier.opus_high}
-    opus   xhigh   : {calls_by_tier.opus_xhigh}
-    opus   max     : {calls_by_tier.opus_max}
-    Escalations    : {escalations_total}
-    Cost (actual)  : ${estimated_cost_usd:.4f}
-    Cost (baseline): ${baseline_opus_xhigh_cost_usd:.4f}
-    Savings        : ${estimated_savings_usd:.4f}
-```
-
-## 4. Smart recommendation
-
-Compute these proportions from `session_stats`:
-
-- `total = session_stats.total_calls` (skip section if `total == 0`)
-- `opus_used = (calls_by_tier.opus_low + opus_medium + opus_high +
-   opus_xhigh + opus_max) / total`
-- `haiku_used = calls_by_tier.haiku_none / total`
-- `escalation_pct = escalations_total / total`
-
-Print **exactly one** of:
-
-- if `opus_used > 0.75`:
-  `Opus handling most tasks. Try 'balanced' if speed is a concern.`
-- elif `haiku_used > 0.65`:
-  `Haiku handling most tasks — savings are maximal. Consider 'fast' to push further.`
-- elif `escalation_pct > 0.30`:
-  `High escalation rate. Your codebase has many sensitive files — accuracy is being maintained.`
-- else:
-  `Router performing within expected parameters for {mode} mode.`
-
-Run via inline Python so the math and JSON read happen in one step:
+## Inline Python
 
 ```bash
 python3 - <<'EOF'
 import json, pathlib
-_h = pathlib.Path.home() / ".claude" / "router-config.json"
-_p = pathlib.Path(".claude/router-config.json")
-cfg = json.loads((_h if _h.exists() else _p).read_text())
-# format and print the four blocks above
+home = pathlib.Path.home() / ".claude" / "router-config.json"
+proj = pathlib.Path(".claude/router-config.json")
+p = home if home.exists() else proj
+cfg = json.loads(p.read_text())
+
+mode = cfg.get("mode", "balanced")
+target = cfg.get("accuracy_target", 99.0)
+stats = cfg.get("session_stats", {}) or {}
+calls = stats.get("calls_by_tier", {}) or {}
+toks = stats.get("tokens_by_tier", {}) or {}
+
+total = stats.get("total_calls", 0)
+mismatches = stats.get("dispatch_mismatches", 0)
+blocks = stats.get("dispatch_blocks", 0)
+esc = stats.get("escalations_total", 0)
+
+cost = stats.get("estimated_cost_usd", 0.0)
+base = stats.get("baseline_opus_xhigh_cost_usd", 0.0)
+saved = stats.get("estimated_savings_usd", 0.0)
+
+# Empirical accuracy: 1 - (misroutes / total). Floor at 0
+if total > 0:
+    empirical = max(0.0, 1.0 - (mismatches / total)) * 100
+else:
+    empirical = 100.0
+
+# Tokens saved % vs baseline-Opus-xhigh
+if base > 0:
+    saved_pct = (saved / base) * 100
+else:
+    saved_pct = 0.0
+
+# Token totals across tiers
+total_in = sum(v for k, v in toks.items() if k.endswith("_in")) if any("_in" in k for k in toks) else 0
+total_out = sum(v for k, v in toks.items() if k.endswith("_out")) if any("_out" in k for k in toks) else sum(toks.values())
+
+bar_w = 30
+def bar(pct):
+    n = int(round((pct / 100.0) * bar_w))
+    return "█" * n + "░" * (bar_w - n)
+
+print()
+print("┌─────────────────────────────────────────────────────────────┐")
+print(f"│  ATrain status — mode: {mode:<12s} target acc: {target:>5.1f}%       │")
+print("├─────────────────────────────────────────────────────────────┤")
+print(f"│  Accuracy   {bar(empirical)} {empirical:6.2f}% │")
+print(f"│  Saved tok  {bar(min(saved_pct, 100))} {saved_pct:6.2f}% │")
+print("├─────────────────────────────────────────────────────────────┤")
+print(f"│  Total calls       : {total:<10d}                             │")
+print(f"│  Misroutes         : {mismatches:<10d}                             │")
+print(f"│  Blocks (caught)   : {blocks:<10d}                             │")
+print(f"│  Sensitive escalate: {esc:<10d}                             │")
+print("├─────────────────────────────────────────────────────────────┤")
+print(f"│  Cost (this sess)  : ${cost:<8.4f}                            │")
+print(f"│  Cost (all-Opus)   : ${base:<8.4f}                            │")
+print(f"│  Saved             : ${saved:<8.4f}                            │")
+print("├─────────────────────────────────────────────────────────────┤")
+print(f"│  Tier breakdown                                             │")
+for tier in ("haiku_none","sonnet_medium","sonnet_high",
+             "opus_high","opus_xhigh","opus_max"):
+    n = calls.get(tier, 0)
+    if n > 0:
+        print(f"│    {tier:<16s}: {n:<6d}                              │")
+print("├─────────────────────────────────────────────────────────────┤")
+
+# v6.8 — cost budget alarm + actionable tips. Show flags when
+# session is going off-rails so user can intervene mid-flight.
+flags = []
+if cost > 5.0 and saved_pct < 30.0:
+    flags.append(f"⚠ HIGH-COST ({cost:.2f}$) + LOW SAVE ({saved_pct:.0f}%)")
+    flags.append("  → escalating too aggressively. Check tier breakdown")
+    flags.append("  → opus_xhigh count high? Run /clear, restart")
+opus_xh = calls.get("opus_xhigh", 0)
+if total > 100 and opus_xh / max(total, 1) > 0.30:
+    flags.append("⚠ Over-escalating: >30% of calls hit opus_xhigh")
+    flags.append("  → likely path/keyword false-positive. /atrain-go to reset")
+if total > 50 and calls.get("haiku_none", 0) / max(total, 1) < 0.10:
+    flags.append("⚠ Under-using haiku: <10% recon on cheapest tier")
+    flags.append("  → run: python3 ~/.claude/hooks/router.py --index")
+if total > 80:
+    flags.append(f"ℹ Long session ({total} calls). Consider /clear before")
+    flags.append("  next unrelated task. Cuts 30-60% off next prompt.")
+
+if flags:
+    print("│  Alerts                                                     │")
+    for f in flags:
+        print(f"│  {f:<60s} │")
+    print("└─────────────────────────────────────────────────────────────┘")
+else:
+    print("│  Healthy — no flags                                         │")
+    print("└─────────────────────────────────────────────────────────────┘")
 EOF
 ```
 
-Do not invoke any further tools after the report prints.
+Do not invoke any further tools after the card prints.
