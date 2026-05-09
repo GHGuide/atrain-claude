@@ -1,23 +1,40 @@
 # 🚂 ATrain Claude · v7.5
 
-> **A-Train ran through Claude Code in ULTRA mode.**
-> **$31.63 saved (70%) on a real 913-prompt session. Same Claude. 99.8% accuracy.**
+> **Per-call model router for Claude Code. Sends cheap work to Haiku, hard work to Opus, and compresses everything in between.**
+>
+> Real measured savings on real Claude Code sessions: **58–71%** at the same accuracy as all-Opus.
 
 [![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
 ---
 
-## Try Before Installing — Token Autopsy
+## What it actually does
 
-Pick any past Claude Code session transcript. Project savings without touching anything:
+Claude Code, by default, runs every tool call on the same model. A 50-character `Read` and a 4-file refactor pay the same Opus rate.
+
+ATrain is a hook layer that sits between you and Claude Code. On every prompt and every tool call, it:
+
+1. **Classifies the work** — recon vs. impl vs. architecture vs. sensitive (auth/crypto/payment)
+2. **Routes to the cheapest tier that can handle it** — Haiku for reads, Sonnet for edits, Opus for design + sensitive
+3. **Compresses output** — caveman terse mode for natural-language responses (code/commits/security stay normal)
+4. **Caches and indexes** — repeated reads served from SQLite, codebase symbol index built once per session
+5. **Rewrites bash output** — verbose `cargo test` / `pytest` / `git status` collapsed before hitting context
+
+No API key. No new CLI. Bundled Claude Code tokens only. Pure stdlib Python.
+
+---
+
+## Try it on YOUR past sessions before installing
+
+The autopsy tool reads any past Claude Code transcript and shows what ATrain *would have* saved. Free, offline, no install.
 
 ```bash
 git clone https://github.com/LeonardoCalancea/atrain-claude
 cd atrain-claude
-python3 tools/atrain_autopsy.py ~/.claude/projects/*/recent.jsonl --intensity ultra
+python3 tools/atrain_autopsy.py ~/.claude/projects/*/<session>.jsonl
 ```
 
-Output on a real 913-prompt session (LELAU-UI project):
+Real output (913-prompt LELAU-UI session, ULTRA caveman):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -34,13 +51,11 @@ Output on a real 913-prompt session (LELAU-UI project):
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-You see the savings on YOUR actual workload before installing anything. Free. No setup. No API key.
-
-Pass `--intensity full` (default), `--intensity ultra` (caveman dumb-on), or `--intensity off` (no caveman) to project different modes.
+`--intensity off` / `full` (default) / `ultra` projects different caveman levels.
 
 ---
 
-## Install in 30 seconds
+## Install
 
 ```bash
 git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude
@@ -48,176 +63,64 @@ bash install.sh
 ```
 
 Then in Claude Code:
+
 ```
 /atrain-go
 ```
 
-That's it. ATrain is armed for the conversation.
+Done. Armed for the conversation.
 
 ---
 
-## How It Saves 85-95%
+## How routing decides (real rules from the source)
 
-ATrain is 7 optimizations stacked into one Claude Code plugin:
+`SKILL.md` lines 39–73 are the routing table. Every tool call gets classified by tool + input size + keywords.
 
-| Layer | What | Saves |
-|-------|------|-------|
-| **Per-call routing** | Haiku for reads, Sonnet for impl, Opus for architecture/sensitive | 50-70% |
-| **Caveman terse output** | Drops articles, fillers, hedging — keeps full technical substance | 30-65% (median 65%) |
-| **Decompose + Skeleton-of-Thought** | Big prompts split into parallel chunks, each routed to cheapest capable tier | 25-40% |
-| **Diff-aware cache** | Repeated Reads served from sqlite cache; mtime+size invalidation | 15-25% |
-| **Codebase symbol index** | Auto-built on session start — recon answers without expensive Reads | 15-25% |
-| **Bash output rewrite** | Compresses verbose grep/find/git output before it hits context | up to 80% on bash-heavy sessions |
-| **Sensitive-keyword forcing** | 85 keywords (auth/payment/crypto/PII) always go to Opus xhigh — accuracy stays | accuracy +1pp |
+| Tier | Routes here when |
+|------|------------------|
+| **Haiku (no effort)** | `Read`/`LS`/`Glob` with input < 300 chars · `Grep` < 150 · `WebSearch` < 80 · `Bash` starting with `grep`/`ls`/`find`/`cat`/`head`/`tail`/`wc`/`pwd`/`stat` · formatters (prettier/black/eslint --fix/gofmt) |
+| **Sonnet medium** | `Write`/`Edit` < 150 lines (input < 1500) · test runners (pytest/jest/vitest/cargo test/go test) · boilerplate keywords |
+| **Sonnet high** | `Write`/`Edit` 150–400 lines · 2–3 file changes · debugging with stack trace · API routes/endpoints |
+| **Opus high/xhigh** | `Write`/`Edit` > 400 lines · 4+ file changes · architecture · performance · complex debugging · **any prompt hitting one of 85 sensitive keywords (auth, jwt, oauth, password, crypto, encryption, payment, stripe, webhook, migration, schema, deploy, prod, secret, token, …)** |
 
-Each multiplies. Net: **85-95% saved, 99.8% accuracy** (matches all-Opus ceiling).
+Sensitive keywords always force Opus xhigh regardless of size. That's the accuracy floor: never silently downgrade a security-relevant call.
 
----
+The Haiku trust threshold self-calibrates from session error rate (`router.py:3117–3175`):
 
-## Three Commands. That's It.
+- Default 0.92
+- After 20+ Haiku calls, computes `trust_rate = trusted / total`
+- Trust > 0.92 → relax threshold by −0.005 (more Haiku)
+- Trust < 0.70 → tighten by +0.005 (fewer Haiku)
+- Verification escalation de
 
-```
-/atrain-go          arm everything for this conversation
-/atrain-status      live accuracy + tokens-saved card
-/atrain-kill        disarm
-```
+... [content truncated, 5335 chars omitted] ...
 
-## Verbosity Dial — Pick How Terse
-
-```
-/atrain-smart-on    caveman OFF — full Claude prose (~35% saved)
-/atrain-go          balanced default — caveman FULL (~62% saved)
-/atrain-dumb-on     caveman ULTRA — max compression (~70% saved)
-```
-
-Each step adds compression. Code/commits/security ALWAYS write normal regardless.
-
-## Plus 3 Viral Extras
-
-```
-/atrain-receipt     shareable SVG card → tweet your savings
-/atrain-dashboard   htop-style live TUI (separate terminal)
-/atrain-autopsy     paste any past Claude transcript → see what would've saved
-```
-
----
-
-## The Receipt (after every session)
-
-`/atrain-receipt` generates a shareable SVG you can drop into Twitter, Discord, or Slack.
-
-![Sample receipt](docs/receipt-lelau-ultra.svg)
-
-One-click tweet text:
-> "ATrain just saved me $31.63 (70%) on this Claude Code session. Same accuracy, fraction of the cost. github.com/LeonardoCalancea/atrain-claude"
-
----
-
-## Benchmarks (reproducible)
-
-[Full results: BENCHMARKS.md](./BENCHMARKS.md)
-
-| Bench | Result |
-|-------|--------|
-| Classifier eval (108 cases) | **108/108 (100%)** zero misroutes |
-| A/B vs all-Opus (10 prompts) | **-58.7%** cost |
-| 3-workload synthetic projection | **-29% to -85%** depending on workload |
-| Real-session autopsy LELAU-UI (913 prompts, ULTRA) | **-70.9%** cost ($31.63 saved) |
-| Real-session autopsy (default FULL caveman) | **-62.7%** cost ($27.98 saved) |
-| Real-session autopsy website-builder (316 prompts) | **-61.4%** cost ($6.93 saved) |
-
-Every script is stdlib Python. No API keys. No torch. Run them yourself:
-
-```bash
-python3 tools/evals/run_eval.py
-python3 bench_ab.py
-python3 tools/evals/three_workloads_bench.py
-python3 tools/atrain_autopsy.py <your-transcript.jsonl>
-```
-
----
-
-## What Makes ATrain Different
-
-| Tool | Token reduction | Accuracy | Bundled tokens | Setup |
-|------|-----------------|----------|----------------|-------|
-| Anthropic Claude Code (default) | 0% baseline | 100% | yes | none |
-| Caveman alone | ~20-25% | 99% | yes | one-line |
-| Aider repo-map | ~15-25% on recon | 99%+ | **no — needs API** | new CLI |
-| RouteLLM (academic) | 30-50% | 95% | n/a | research |
-| **ATrain v7.5** | **62-95%** (verified on 1300+ real prompts) | **99.8%** | **yes** | **30 sec** |
-
-ATrain is the only tool that:
-1. Saves 60-95% across real workloads (verified via autopsy)
-2. Matches Opus ceiling on accuracy
-3. Works with bundled Claude Code tokens (no API key)
-4. Installs in 30 seconds via one bash script
-5. Lets you reproduce all benchmarks yourself (stdlib only)
-6. Lets you preview savings on YOUR past sessions before installing
-
----
-
-## How It Works (One Diagram)
-
-```
-You type a prompt
-        │
-        ▼
-┌─────────────────────────────────────┐
-│  UserPromptSubmit hook              │
-│  • Caveman rules (rate-limited)     │
-│  • Skeleton-of-Thought directive    │
-│  • Vague-prompt coach               │
-│  • Aggregation pattern detector     │
-│  • Microcompact byte-trigger        │
-└─────────────────────────────────────┘
-        │
-        ▼
-Claude reads, plans, decomposes
-        │
-        ▼
-┌─────────────────────────────────────┐
-│  PreToolUse hook (every tool call)  │
-│  • Classify → Haiku/Sonnet/Opus     │
-│  • Sensitive keyword scan (85 kw)   │
-│  • Bash command pre-rewrite         │
-│  • Cache lookup (diff-aware)        │
-│  • Index lookup (skip read entirely)│
-│  • Loop detector                    │
-│  • Speculative-edit hint            │
-│  • Confidence gate (destructive ops)│
-│  • Stale-output eviction            │
-└─────────────────────────────────────┘
+───┘
         │
         ▼
 Tool runs
         │
         ▼
-┌─────────────────────────────────────┐
-│  PostToolUse hook                   │
-│  • Compile-aware verification       │
-│  • Fact-anchor verification         │
-│  • Anti-rambling detector           │
-│  • Outline compression (.py/.ts)    │
-│  • Cost + accuracy stats updated    │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  PostToolUse hook                       │
+│  • Compile-aware verification (9 langs) │
+│  • Fact-anchor verification             │
+│  • Anti-rambling detector               │
+│  • Outline compression (.py/.ts)        │
+│  • Cost + accuracy stats updated        │
+│  • Trust-threshold recalibrated         │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
 ## Architecture
 
-- **Pure stdlib Python** (no torch, no transformers, no API keys)
-- **SQLite caches** (tool result cache + symbol index + route_failures + session memory)
-- **fcntl.flock** for race-safe concurrent config writes
-- **AST + regex** for codebase indexing (Python ast, JS/TS/Go/Rust regex)
-- **Multi-language compile-aware verification** (.py, .json, .js, .ts, .go, .rs, .sh, .yaml, .toml)
-
 ```
 .claude/
-├── hooks/router.py            # 4500 LOC, all logic
-├── commands/                  # 6 slash commands
-├── agents/                    # 5 specialized subagents
+├── hooks/router.py            # ~4500 LOC, all logic
+├── commands/                  # slash commands
+├── agents/                    # specialized subagents
 └── router-config.json         # live state + per-tier routing tables
 
 tools/
@@ -227,36 +130,55 @@ tools/
 └── evals/                     # bench scripts + 108-case eval corpus
 ```
 
+- Pure stdlib Python (no torch, no transformers, no API keys)
+- SQLite caches: tool-result cache + symbol index + route_failures + session memory
+- `fcntl.flock` for race-safe concurrent config writes
+- AST + regex for codebase indexing (Python `ast`, JS/TS/Go/Rust regex)
+- Multi-language compile-aware verification (`.py`, `.json`, `.js`, `.ts`, `.go`, `.rs`, `.sh`, `.yaml`, `.toml`)
+
+---
+
+## Comparison
+
+| Tool | Reduction (real) | Accuracy | Bundled tokens | Setup |
+|------|------------------|----------|----------------|-------|
+| Claude Code default | 0% baseline | 100% | yes | none |
+| Caveman alone | ~20–25% | 99% | yes | one-line |
+| Aider repo-map | ~15–25% on recon | 99%+ | no (own API key) | new CLI |
+| RouteLLM (research) | 30–50% | 95% | n/a | research |
+| **ATrain v7.5** | **58–71% (verified, real sessions)** | **99.8%** | **yes** | **30 sec** |
+
+---
+
+## Built on research
+
+Patterns integrated, all credited inline in code:
+
+- **Skeleton-of-Thought** — Ning et al., ICLR 2024, [arxiv 2307.15337](https://arxiv.org/abs/2307.15337)
+- **TokenSkip** — Xia et al., 2025, [arxiv 2502.12067](https://arxiv.org/abs/2502.12067)
+- **Adaptive-Consistency** — Aggarwal et al., EMNLP 2023, [arxiv 2305.11860](https://arxiv.org/abs/2305.11860)
+- **Speculative Cascade / Cascadia** — Google Research, [arxiv 2506.04203](https://arxiv.org/abs/2506.04203)
+- **SupervisorAgent** — ICLR 2026, [arxiv 2510.26585](https://arxiv.org/abs/2510.26585)
+- **Caveman pattern** — [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) (median 65% output reduction across 10 tasks)
+- **rtk pattern** for bash compaction — [rtk-ai/rtk](https://github.com/rtk-ai/rtk)
+- **Anthropic Code-Execution-with-MCP** — [anthropic.com/engineering](https://www.anthropic.com/engineering/code-execution-with-mcp)
+
+Plus original patterns: Fact-Anchor verification, Confidence Gate on destructive ops, Stale-Tool-Result Eviction notice.
+
 ---
 
 ## Roadmap
 
-**Shipped (v7.5):** routing, caveman (full/ultra/off via /atrain-dumb-on, /atrain-smart-on), decompose, diff-aware cache, codebase index, sensitive keywords (85), bash rewrite, MoA-Lite, Adaptive-Consistency, TokenSkip, Skeleton-of-Thought, Speculative Edits, compile-aware verification (9 langs), fact anchor, anti-rambling, loop detector, outline compression, stale eviction, confidence gate (destructive ops), microcompact byte-trigger, structured distillation, vague-prompt coach, aggregation hint, context advisory, **caveman directive rate-limit (saves ~237K input tokens on 800-turn sessions)**
+**Shipped (v7.5):** routing, caveman (full/ultra/off), decompose, diff-aware cache, codebase index, 85 sensitive keywords, bash rewrite, MoA-Lite, Adaptive-Consistency, TokenSkip, Skeleton-of-Thought, Speculative Edits, compile-aware verification (9 langs), fact anchor, anti-rambling, loop detector, outline compression, stale eviction, confidence gate, microcompact trigger, structured distillation, vague-prompt coach, aggregation hint, caveman directive rate-limit (saves ~237K input tokens on 800-turn sessions).
 
 **Roadmap (v8.x):**
+
 - GitHub Action: PR badge showing % saved on this PR
 - VS Code / Cursor statusbar widget
-- `/atrain-wrapped` annual Spotify-style summary
+- `/atrain-wrapped` annual summary
 - `atrain.dev/share/<id>` hosted receipts
 - Aider tree-sitter PageRank for symbol ranking
 - Public opt-in leaderboard
-
----
-
-## Built On Research
-
-ATrain integrates patterns from 2024-2026 papers, all credited inline:
-
-- **Skeleton-of-Thought** (Ning et al., ICLR 2024) — [arxiv 2307.15337](https://arxiv.org/abs/2307.15337)
-- **TokenSkip** (Xia et al., 2025) — [arxiv 2502.12067](https://arxiv.org/abs/2502.12067)
-- **Adaptive-Consistency** (Aggarwal et al., EMNLP 2023) — [arxiv 2305.11860](https://arxiv.org/abs/2305.11860)
-- **Speculative Cascade / Cascadia** (Google Research) — [arxiv 2506.04203](https://arxiv.org/abs/2506.04203)
-- **SupervisorAgent** (ICLR 2026) — [arxiv 2510.26585](https://arxiv.org/abs/2510.26585)
-- **Caveman pattern** — [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) (median 65% output reduction)
-- **rtk pattern** for bash compaction — [rtk-ai/rtk](https://github.com/rtk-ai/rtk)
-- **Anthropic Code-Execution-with-MCP** — [anthropic.com/engineering](https://www.anthropic.com/engineering/code-execution-with-mcp)
-
-Plus original patterns: Fact Anchor verification, Confidence Gate on destructive ops, Stale-Tool-Result Eviction notice.
 
 ---
 
@@ -264,20 +186,8 @@ Plus original patterns: Fact Anchor verification, Confidence Gate on destructive
 
 MIT. Use it. Fork it. Star it.
 
-If ATrain saves you a lot of tokens, [tweet your receipt](https://twitter.com/intent/tweet?text=ATrain+just+saved+me+tokens+on+Claude+Code) and tag it. Helps others find it.
+If ATrain saves you tokens, [tweet your receipt](https://twitter.com/intent/tweet?text=ATrain+just+saved+me+tokens+on+Claude+Code) — helps others find it.
 
 ---
 
-## Star history
-
-If you've made it this far, the install is one bash command. Try it.
-
-```bash
-git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude && bash install.sh
-```
-
-Then `/atrain-go` and watch your bundled tokens go further.
-
----
-
-🚂 **ATrain — the fastest router on Claude Code.**
+🚂 **ATrain — per-call routing for Claude Code. Real measured 58–71% saved at 99.8% accuracy.**
