@@ -130,7 +130,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("transcript", nargs="?", help="JSONL or text file")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--intensity",
+                    choices=["off", "lite", "full", "ultra"],
+                    default="full",
+                    help="Caveman intensity to project. "
+                         "ultra=0.20, full=0.35 (default), "
+                         "lite=0.55, off=1.0 (no caveman).")
     args = ap.parse_args()
+
+    cm_factors = {"off": 1.0, "lite": 0.55, "full": 0.35, "ultra": 0.20}
+    cav = cm_factors[args.intensity]
 
     prompts = parse_input(args.transcript)
     if not prompts:
@@ -145,8 +154,8 @@ def main():
     for prompt in prompts:
         model, effort, reason = classify(prompt)
         in_tok, out_tok = estimate_tokens(prompt)
-        # Caveman applied → -65% output
-        out_atrain = int(out_tok * 0.35)
+        # Caveman applied
+        out_atrain = int(out_tok * cav)
         a_cost = cost(in_tok, out_atrain, model)
         o_cost = cost(in_tok, out_tok, "opus")
         atrain_total += a_cost

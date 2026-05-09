@@ -2383,7 +2383,22 @@ def handle_user_prompt_submit(data: dict) -> None:
             "BOUNDARIES\n"
             "  Code/commits/PRs/security: write NORMAL. Never compress."
         )
-        parts.append(rules)
+        # v7.5 — Rate-limit caveman directive injection. Full block was
+        # injected EVERY UserPromptSubmit (~600 chars × N turns =
+        # quadratic input bloat). Now: full block on turn 1 + every
+        # 10th turn; brief 1-line reminder otherwise. Saves ~80% of
+        # caveman-directive overhead on long sessions (~100k tokens
+        # on 800-turn convos).
+        n_user_turns = len([e for e in log if e.get("phase") == "pre"])
+        is_full_inject_turn = (n_user_turns == 0) or (n_user_turns % 10 == 0)
+        if is_full_inject_turn:
+            parts.append(rules)
+        else:
+            parts.append(
+                f"ATrain caveman: {intensity} (active). Drop "
+                "articles/filler/hedging. Fragments OK. Code "
+                "unchanged. Full rules every 10 turns."
+            )
 
     # v7.2 — Code Execution Pattern (Anthropic engineering blog).
     # When prompt asks for fan-out aggregation ("read all files and",
