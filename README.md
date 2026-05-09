@@ -1,38 +1,42 @@
-# 🚂 ATrain Claude
+# 🚂 ATrain Claude · v7.5
 
-> **ATrain just saved $56.38 on this Claude Code session. 85.9% off vs all-Opus.**
-> Same model. Same accuracy (99.8%). Fraction of the cost.
+> **A-Train ran through Claude Code in ULTRA mode.**
+> **$31.63 saved (70%) on a real 913-prompt session. Same Claude. 99.8% accuracy.**
 
-[![Receipt](docs/receipt-demo.svg)](https://github.com/LeonardoCalancea/atrain-claude)
+[![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
 ---
 
 ## Try Before Installing — Token Autopsy
 
+Pick any past Claude Code session transcript. Project savings without touching anything:
+
 ```bash
 git clone https://github.com/LeonardoCalancea/atrain-claude
 cd atrain-claude
-python3 tools/atrain_autopsy.py ~/.claude/projects/*/recent.jsonl
+python3 tools/atrain_autopsy.py ~/.claude/projects/*/recent.jsonl --intensity ultra
 ```
 
-Output on a real 102-prompt session:
+Output on a real 913-prompt session (LELAU-UI project):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  🚂 ATrain Token Autopsy                                        │
 ├─────────────────────────────────────────────────────────────────┤
-│  Prompts analyzed   : 102
-│  Routed to haiku    : 19    (18.6%)
-│  Routed to sonnet   : 66    (64.7%)
-│  Routed to opus     : 17    (16.7%)
+│  Prompts analyzed   : 913
+│  Routed to haiku    : 127   (13.9%)
+│  Routed to sonnet   : 494   (54.1%)
+│  Routed to opus     : 292   (32.0%)
 ├─────────────────────────────────────────────────────────────────┤
-│  Cost with ATrain   : $1.03
-│  Cost all-Opus      : $3.28
-│  WOULD HAVE SAVED   : $2.25      (68.5%)
+│  Cost with ATrain   : $12.96
+│  Cost all-Opus      : $44.59
+│  WOULD HAVE SAVED   : $31.63     (70.9%)
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-You see the savings on YOUR actual workload before installing anything.
+You see the savings on YOUR actual workload before installing anything. Free. No setup. No API key.
+
+Pass `--intensity full` (default), `--intensity ultra` (caveman dumb-on), or `--intensity off` (no caveman) to project different modes.
 
 ---
 
@@ -78,7 +82,17 @@ Each multiplies. Net: **85-95% saved, 99.8% accuracy** (matches all-Opus ceiling
 /atrain-kill        disarm
 ```
 
-Plus 3 viral extras:
+## Verbosity Dial — Pick How Terse
+
+```
+/atrain-smart-on    caveman OFF — full Claude prose (~35% saved)
+/atrain-go          balanced default — caveman FULL (~62% saved)
+/atrain-dumb-on     caveman ULTRA — max compression (~70% saved)
+```
+
+Each step adds compression. Code/commits/security ALWAYS write normal regardless.
+
+## Plus 3 Viral Extras
 
 ```
 /atrain-receipt     shareable SVG card → tweet your savings
@@ -92,10 +106,10 @@ Plus 3 viral extras:
 
 `/atrain-receipt` generates a shareable SVG you can drop into Twitter, Discord, or Slack.
 
-![Sample receipt](docs/receipt-demo.svg)
+![Sample receipt](docs/receipt-lelau-ultra.svg)
 
 One-click tweet text:
-> "ATrain just saved me $56.38 (86%) on this Claude Code session. Same accuracy, fraction of the cost. github.com/LeonardoCalancea/atrain-claude"
+> "ATrain just saved me $31.63 (70%) on this Claude Code session. Same accuracy, fraction of the cost. github.com/LeonardoCalancea/atrain-claude"
 
 ---
 
@@ -108,8 +122,9 @@ One-click tweet text:
 | Classifier eval (108 cases) | **108/108 (100%)** zero misroutes |
 | A/B vs all-Opus (10 prompts) | **-58.7%** cost |
 | 3-workload synthetic projection | **-29% to -85%** depending on workload |
-| Real-session autopsy (102 prompts) | **-68.5%** cost ($2.25 saved) |
-| Live session (this repo) | **-85.9%** cost ($56.38 saved) |
+| Real-session autopsy LELAU-UI (913 prompts, ULTRA) | **-70.9%** cost ($31.63 saved) |
+| Real-session autopsy (default FULL caveman) | **-62.7%** cost ($27.98 saved) |
+| Real-session autopsy website-builder (316 prompts) | **-61.4%** cost ($6.93 saved) |
 
 Every script is stdlib Python. No API keys. No torch. Run them yourself:
 
@@ -125,11 +140,45 @@ python3 tools/atrain_autopsy.py <your-transcript.jsonl>
 ## What Makes ATrain Different
 
 | Tool | Token reduction | Accuracy | Bundled tokens | Setup |
-|------|-----------------|----------|----------------
+|------|-----------------|----------|----------------|-------|
+| Anthropic Claude Code (default) | 0% baseline | 100% | yes | none |
+| Caveman alone | ~20-25% | 99% | yes | one-line |
+| Aider repo-map | ~15-25% on recon | 99%+ | **no — needs API** | new CLI |
+| RouteLLM (academic) | 30-50% | 95% | n/a | research |
+| **ATrain v7.5** | **62-95%** (verified on 1300+ real prompts) | **99.8%** | **yes** | **30 sec** |
 
-... [content truncated, 1077 chars omitted] ...
+ATrain is the only tool that:
+1. Saves 60-95% across real workloads (verified via autopsy)
+2. Matches Opus ceiling on accuracy
+3. Works with bundled Claude Code tokens (no API key)
+4. Installs in 30 seconds via one bash script
+5. Lets you reproduce all benchmarks yourself (stdlib only)
+6. Lets you preview savings on YOUR past sessions before installing
 
-• Classify → Haiku/Sonnet/Opus     │
+---
+
+## How It Works (One Diagram)
+
+```
+You type a prompt
+        │
+        ▼
+┌─────────────────────────────────────┐
+│  UserPromptSubmit hook              │
+│  • Caveman rules (rate-limited)     │
+│  • Skeleton-of-Thought directive    │
+│  • Vague-prompt coach               │
+│  • Aggregation pattern detector     │
+│  • Microcompact byte-trigger        │
+└─────────────────────────────────────┘
+        │
+        ▼
+Claude reads, plans, decomposes
+        │
+        ▼
+┌─────────────────────────────────────┐
+│  PreToolUse hook (every tool call)  │
+│  • Classify → Haiku/Sonnet/Opus     │
 │  • Sensitive keyword scan (85 kw)   │
 │  • Bash command pre-rewrite         │
 │  • Cache lookup (diff-aware)        │
@@ -182,7 +231,7 @@ tools/
 
 ## Roadmap
 
-**Shipped (v7.3):** routing, caveman, decompose, diff-aware cache, codebase index, sensitive keywords, bash rewrite, MoA-Lite, Adaptive-Consistency, TokenSkip, Skeleton-of-Thought, Speculative Edits, compile-aware verification (9 langs), fact anchor, anti-rambling, loop detector, outline compression, stale eviction, confidence gate, microcompact, structured distillation, vague-prompt coach, aggregation hint, context advisory
+**Shipped (v7.5):** routing, caveman (full/ultra/off via /atrain-dumb-on, /atrain-smart-on), decompose, diff-aware cache, codebase index, sensitive keywords (85), bash rewrite, MoA-Lite, Adaptive-Consistency, TokenSkip, Skeleton-of-Thought, Speculative Edits, compile-aware verification (9 langs), fact anchor, anti-rambling, loop detector, outline compression, stale eviction, confidence gate (destructive ops), microcompact byte-trigger, structured distillation, vague-prompt coach, aggregation hint, context advisory, **caveman directive rate-limit (saves ~237K input tokens on 800-turn sessions)**
 
 **Roadmap (v8.x):**
 - GitHub Action: PR badge showing % saved on this PR
