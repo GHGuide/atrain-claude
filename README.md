@@ -3,14 +3,14 @@
 > **ATrain just saved $56.38 on this Claude Code session. 85.9% off vs all-Opus.**
 > Same model. Same accuracy (99.8%). Fraction of the cost.
 
-[![Receipt](docs/receipt-demo.svg)](https://github.com/Metrcih/atrain-claude)
+[![Receipt](docs/receipt-demo.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
 ---
 
 ## Try Before Installing — Token Autopsy
 
 ```bash
-git clone https://github.com/Metrcih/atrain-claude
+git clone https://github.com/LeonardoCalancea/atrain-claude
 cd atrain-claude
 python3 tools/atrain_autopsy.py ~/.claude/projects/*/recent.jsonl
 ```
@@ -39,7 +39,7 @@ You see the savings on YOUR actual workload before installing anything.
 ## Install in 30 seconds
 
 ```bash
-git clone https://github.com/Metrcih/atrain-claude && cd atrain-claude
+git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude
 bash install.sh
 ```
 
@@ -95,7 +95,7 @@ Plus 3 viral extras:
 ![Sample receipt](docs/receipt-demo.svg)
 
 One-click tweet text:
-> "ATrain just saved me $56.38 (86%) on this Claude Code session. Same accuracy, fraction of the cost. github.com/Metrcih/atrain-claude"
+> "ATrain just saved me $56.38 (86%) on this Claude Code session. Same accuracy, fraction of the cost. github.com/LeonardoCalancea/atrain-claude"
 
 ---
 
@@ -224,7 +224,7 @@ If ATrain saves you a lot of tokens, [tweet your receipt](https://twitter.com/in
 If you've made it this far, the install is one bash command. Try it.
 
 ```bash
-git clone https://github.com/Metrcih/atrain-claude && cd atrain-claude && bash install.sh
+git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude && bash install.sh
 ```
 
 Then `/atrain-go` and watch your bundled tokens go further.

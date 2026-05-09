@@ -19,16 +19,16 @@
         font-size="14">Sat 09 May 2026 · mode: balanced</text>
 
   <text x="50" y="170" fill="#10b981" font-family="ui-monospace,Menlo,monospace"
-        font-size="64" font-weight="700">$3.51</text>
+        font-size="64" font-weight="700">$4.46</text>
   <text x="50" y="200" fill="#94a3b8" font-family="ui-monospace,Menlo,monospace"
-        font-size="14">saved vs all-Opus baseline (27.2%)</text>
+        font-size="14">saved vs all-Opus baseline (90.7%)</text>
 
   <rect x="50" y="225" width="540" height="20" rx="10" fill="#1e293b"/>
-  <rect x="50" y="225" width="146" height="20" rx="10" fill="url(#bar)"/>
+  <rect x="50" y="225" width="489" height="20" rx="10" fill="url(#bar)"/>
 
   <text x="50" y="295" fill="#cbd5e1" font-family="ui-monospace,Menlo,monospace"
-        font-size="14">79 tool calls · $9.39 actual · $12.90 baseline</text>
+        font-size="14">36 tool calls · $0.46 actual · $4.91 baseline</text>
 
   <text x="50" y="335" fill="#64748b" font-family="ui-monospace,Menlo,monospace"
-        font-size="12">github.com/Metrcih/atrain-claude · /atrain-receipt</text>
+        font-size="12">github.com/LeonardoCalancea/atrain-claude · /atrain-receipt</text>
 </svg>

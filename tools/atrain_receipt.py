@@ -73,7 +73,7 @@ def render_svg(stats: dict, mode: str = "balanced") -> str:
         font-size="14">{total} tool calls · ${cost:.2f} actual · ${base:.2f} baseline</text>
 
   <text x="50" y="335" fill="#64748b" font-family="ui-monospace,Menlo,monospace"
-        font-size="12">github.com/Metrcih/atrain-claude · /atrain-receipt</text>
+        font-size="12">github.com/LeonardoCalancea/atrain-claude · /atrain-receipt</text>
 </svg>"""
 
 
@@ -84,7 +84,7 @@ def tweet_intent(stats: dict) -> str:
     text = (
         f"ATrain just saved me ${saved:.2f} ({pct:.0f}%) on this Claude Code "
         f"session. Same accuracy, fraction of the cost. "
-        f"github.com/Metrcih/atrain-claude"
+        f"github.com/LeonardoCalancea/atrain-claude"
     )
     return "https://twitter.com/intent/tweet?text=" + urllib.parse.quote(text)
 

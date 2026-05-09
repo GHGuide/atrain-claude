@@ -53,7 +53,7 @@ if r.returncode != 0:
 text = (
     f"ATrain just saved me ${saved:.2f} ({pct:.0f}%) on this Claude Code "
     f"session. Same accuracy, fraction of the cost. "
-    f"github.com/Metrcih/atrain-claude"
+    f"github.com/LeonardoCalancea/atrain-claude"
 )
 tweet_url = "https://twitter.com/intent/tweet?text=" + urllib.parse.quote(text)
 
