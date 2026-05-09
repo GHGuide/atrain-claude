@@ -89,13 +89,53 @@ def tweet_intent(stats: dict) -> str:
     return "https://twitter.com/intent/tweet?text=" + urllib.parse.quote(text)
 
 
+def autopsy_stats(jsonl_path: str) -> dict:
+    """Generate stats dict from a past Claude transcript via autopsy."""
+    import subprocess
+    here = pathlib.Path(__file__).resolve().parent
+    autopsy = here / "atrain_autopsy.py"
+    if not autopsy.exists():
+        return {}
+    r = subprocess.run(
+        ["python3", str(autopsy), jsonl_path],
+        capture_output=True, text=True, timeout=30
+    )
+    if r.returncode != 0:
+        return {}
+    out = r.stdout
+    # Parse the simple table — pull "Cost with ATrain" "Cost all-Opus" "WOULD HAVE SAVED"
+    import re as _re
+    m_cost = _re.search(r"Cost with ATrain\s*:\s*\$([\d.]+)", out)
+    m_base = _re.search(r"Cost all-Opus\s*:\s*\$([\d.]+)", out)
+    m_save = _re.search(r"WOULD HAVE SAVED\s*:\s*\$([\d.]+)\s*\(\s*([\d.]+)%\)", out)
+    m_total = _re.search(r"Prompts analyzed\s*:\s*(\d+)", out)
+    if not (m_cost and m_base and m_save and m_total):
+        return {}
+    return {
+        "total_calls": int(m_total.group(1)),
+        "estimated_cost_usd": float(m_cost.group(1)),
+        "baseline_opus_xhigh_cost_usd": float(m_base.group(1)),
+        "estimated_savings_usd": float(m_save.group(1)),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="receipt.svg")
     ap.add_argument("--tweet", action="store_true")
+    ap.add_argument("--autopsy",
+                    help="Path to a Claude Code transcript .jsonl. "
+                         "Generates receipt from autopsy projection "
+                         "instead of live session stats.")
     args = ap.parse_args()
 
-    stats = load_stats()
+    if args.autopsy:
+        stats = autopsy_stats(args.autopsy)
+        if not stats:
+            print(f"Autopsy failed for {args.autopsy}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        stats = load_stats()
     if not stats:
         print("No session stats found. Run /atrain-go and use ATrain first.",
               file=sys.stderr)
