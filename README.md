@@ -150,6 +150,28 @@ tools/
 
 ---
 
+## Optional add-on: Graphify (~+8pp on coding-heavy sessions)
+
+ATrain stacks with [graphify](https://github.com/safishamsi/graphify), a third-party knowledge-graph builder for codebases. Graphify pre-computes a project graph; ATrain routes graph-scoped reads to Haiku more aggressively when the flag is on. On the 913-prompt LELAU-UI tool-call projection, graphify eliminates 35% of `Read` calls (676 of 1,934) by answering "where lives X / how does Y connect" from `GRAPH_REPORT.md`, and downgrades another 314 to scoped Haiku reads. Net: 63.5% → ~71.5% saved on the same workload.
+
+Not bundled — graphify needs ~25 tree-sitter pip deps, which would break ATrain's stdlib-only install promise. Opt in:
+
+```bash
+# one-time
+uv tool install graphifyy   # or: pipx install graphifyy
+
+# inside Claude Code, in your project root
+/atrain-graphify
+```
+
+The slash command builds the graph, registers graphify's Claude Code hook, flips ATrain's `graph_aware` flag, and whitelists `graphify` from bash output rewrite. Project the gain on a past transcript before installing:
+
+```bash
+python3 tools/atrain_graphify_toolcall.py <past-session.jsonl>
+```
+
+---
+
 ## Built on research
 
 Patterns integrated, all credited inline in code:

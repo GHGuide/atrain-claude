@@ -2693,7 +2693,15 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
             and config.get("bash_pre_rewrite_enabled", True)
             and isinstance(compacted_input, dict)):
         original_cmd = compacted_input.get("command", "")
-        if original_cmd:
+        # v7.6 — bash rewrite whitelist. Commands listed in
+        # config.bash_rewrite_whitelist are passed through untouched.
+        # Used by /atrain-graphify so graph build output is preserved.
+        whitelist = config.get("bash_rewrite_whitelist", [])
+        skip = any(
+            isinstance(w, str) and w and original_cmd.lstrip().startswith(w)
+            for w in whitelist
+        )
+        if original_cmd and not skip:
             new_cmd, was_rewritten = rewrite_bash_command(original_cmd)
             if was_rewritten:
                 compacted_input = dict(compacted_input)
