@@ -4,6 +4,8 @@ description: ATrain live session stats — accuracy %, tokens saved %, total cos
 
 User invoked `/atrain-status`.
 
+**EXECUTE the bash block below NOW via the Bash tool. Do not reply "Noted" or summarize — invoke Bash. The user needs the printed card, not an acknowledgement.**
+
 Print a single status card. Show accuracy + token savings prominently.
 
 ## Inline Python

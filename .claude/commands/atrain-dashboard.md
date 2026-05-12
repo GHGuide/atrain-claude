@@ -4,6 +4,8 @@ description: ATrain Live Dashboard — htop-style TUI showing tier histogram, co
 
 User invoked `/atrain-dashboard`.
 
+**EXECUTE the bash block below NOW via the Bash tool. Do not reply "Noted" or summarize — invoke Bash. The user needs the printed launch command, not an acknowledgement.**
+
 Launch the live TUI in a new terminal. Inside Claude Code's prompt
 window we can't take over the screen, so print instructions for the
 user to run it externally.

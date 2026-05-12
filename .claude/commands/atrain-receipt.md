@@ -4,6 +4,8 @@ description: ATrain Save Receipt — generate a shareable SVG card showing $ sav
 
 User invoked `/atrain-receipt`.
 
+**EXECUTE the bash block below NOW via the Bash tool. Do not reply "Noted" or summarize — invoke Bash. The user needs the SVG path + tweet URL, not an acknowledgement.**
+
 ## Procedure
 
 1. Run `python3 tools/atrain_receipt.py --tweet` (fall back to `python3 ~/.claude/tools/atrain_receipt.py --tweet`).

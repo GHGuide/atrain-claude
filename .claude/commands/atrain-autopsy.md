@@ -5,6 +5,8 @@ argument-hint: <transcript.jsonl path>
 
 User invoked `/atrain-autopsy $ARGUMENTS`.
 
+**EXECUTE the bash block below NOW via the Bash tool. Do not reply "Noted" or summarize — invoke Bash. The user needs the printed card, not an acknowledgement.**
+
 Project savings on a past transcript or prompt list. No live API calls.
 
 ## Procedure
