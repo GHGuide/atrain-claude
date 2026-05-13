@@ -2794,8 +2794,8 @@ def handle_user_prompt_submit(data: dict) -> None:
     # always full when ATrain active. Max token economy across the board.
     intensity = config.get("caveman_intensity")
     # eco mode legacy auto-fires full when not set; balanced/quality
-    # respect explicit None as "off" so /atrain-smart-on actually disables
-    # caveman. /atrain-go and /atrain-dumb-on set intensity explicitly.
+    # respect explicit None as "off" so /atrain-normal actually disables
+    # caveman. /atrain-go and /atrain-terse set intensity explicitly.
     if intensity is None and mode == "eco":
         intensity = "full"
     if intensity in ("lite", "full", "ultra"):

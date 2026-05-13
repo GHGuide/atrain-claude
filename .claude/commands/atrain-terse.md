@@ -1,8 +1,8 @@
 ---
-description: ATrain dumb-on — caveman ULTRA mode. Maximum compression. Output reads like Tarzan but with full technical accuracy. Saves additional 15-25% on top of standard ATrain.
+description: ATrain terse — caveman ULTRA output mode. Maximum compression, full technical accuracy. Saves +15-25% on top of base ATrain. Switch back with /atrain-normal.
 ---
 
-User invoked `/atrain-dumb-on`.
+User invoked `/atrain-terse`.
 
 Switch caveman intensity to **ultra** — even more compressed than the
 default `full`. Tradeoff: harder to skim for non-devs. Wins: another
@@ -31,14 +31,14 @@ tmp.write_text(json.dumps(cfg, indent=2))
 os.replace(tmp, p)
 
 print("┌──────────────────────────────────────────────────────┐")
-print("│  🦴 ATrain DUMB-ON                                   │")
+print("│  ATrain TERSE                                        │")
 print("├──────────────────────────────────────────────────────┤")
 print("│  Caveman: ULTRA                                      │")
 print("│  Output: max compressed, abbreviations, arrows       │")
 print("│  Code/commits/security: still write normal           │")
 print("│                                                      │")
-print("│  Saves +15-25% on top of standard ATrain.            │")
-print("│  Switch back: /atrain-smart-on                       │")
+print("│  Saves +15-25% on top of base ATrain.                │")
+print("│  Switch back: /atrain-normal                         │")
 print("└──────────────────────────────────────────────────────┘")
 EOF
 ```

@@ -21,7 +21,7 @@ db_path = pathlib.Path.home() / ".claude" / "router-cache.sqlite"
 if not db_path.exists():
     db_path = pathlib.Path(".claude/router-cache.sqlite")
 if not db_path.exists():
-    print("no router-cache.sqlite found. Run /atrain-v8p2-on first.")
+    print("no router-cache.sqlite found. Run /atrain-v8-go first.")
     sys.exit(0)
 
 toks = [t for t in query.replace('"', " ").split() if len(t) >= 3][:8]

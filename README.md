@@ -182,29 +182,45 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ---
 
-## v8 phase 3: Curated cross-session memory
+## v8 power-user stack — one command
 
-Per-project memory store for decisions, bugfixes, conventions, lessons-learned. Persists across sessions in `~/.claude/router-cache.sqlite`. On every UserPromptSubmit, the hook runs an FTS5 OR-match against the project's memory entries and surfaces top-2 hits as advisory.
+`/atrain-v8-go` flips four features at once + runs a one-time session→project backfill. `/atrain-v8-stop` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
 
-Different from Phase 2/2c: those grep raw tool outputs. Phase 3 stores **curated text** that you intentionally write. Use for tribal knowledge that Claude needs to know on every session start.
+| Feature | What it does | Measured |
+|---------|--------------|----------|
+| Progressive Read | First Read of a large source file → head 60 lines + symbol outline | +0.9pp (capped) |
+| Within-session FTS5 | Index every tool output, advisory on near-duplicate queries | +18–28pp |
+| Cross-session same-project | Same advisory but scoped across **all your prior sessions in this project** (privacy + accuracy win) | +20–33pp (98% hit on 6 benched targets) |
+| Curated memory | Manual project-scoped notes that surface on matching UserPromptSubmit | qualitative |
+
+Curated memory:
 
 ```
-/atrain-memory-on                         # enable advisory injection
-/atrain-remember decision use the         # add a memory
-  retry-with-backoff helper, not the
-  raw fetch loop — see issue #42
+/atrain-remember decision use the retry-with-backoff helper, not raw fetch
 /atrain-memory-list                       # show this project's memories
 /atrain-forget <id>                       # delete one
-/atrain-memory-off                        # stop surfacing (entries kept)
 ```
 
-Categories: `decision | bugfix | convention | lesson | note`. Entries are project-scoped via `os.getcwd()`; cross-project leakage is impossible. Hit count is tracked per entry.
+Categories: `decision | bugfix | convention | lesson | note`. Project-scoped via `os.getcwd()`. Cross-project leakage impossible.
 
-T55 covers the round-trip: add → UserPromptSubmit with matching prompt → assert advisory surfaces the entry with category + text. 55/55 self-tests pass.
+Inspect prior tool outputs from any of your past sessions on this project:
+
+```
+/atrain-recall <query>
+```
+
+Project the gain on your own past session before turning anything on:
+
+```
+python3 tools/atrain_v8_projection.py --skip-prob 0.50 <past.jsonl>
+python3 tools/atrain_cross_session_bench.py --target <past.jsonl> --same-project-only
+```
+
+55/55 self-tests covering: progressive Read intercept + bypass (T52), within-session recall + snippet surfacing (T53), cross-session sess-tag (T54), curated memory round-trip (T55).
 
 ---
 
-## v8 phase 2b: Cross-session recall (measured: +18-33pp)
+## Cross-session recall bench — 6 targets, 2 projects
 
 router-cache.sqlite holds outputs from **every** past Claude Code session you've run. Phase 2b drops the `WHERE session_id = ?` filter on the recall query so the advisory surfaces hits from prior sessions too — tagged with `sess=<id8>` so you can see which session a hit came from.
 
@@ -227,63 +243,7 @@ python3 tools/atrain_cross_session_bench.py \
   --target <session.jsonl> --same-project-only
 ```
 
-Privacy caveat: the index spans every project. Off by default. Turn on with:
-
-```
-/atrain-v8p2-cross-on    # cross-session recall ON
-/atrain-v8p2-cross-off   # back to current-session-only
-rm ~/.claude/router-cache.sqlite   # nuke history entirely
-```
-
-T54 covers the cross-session path: write under session A, read under session B, assert the advisory tags session A.
-
----
-
-## v8 phase 2: FTS5 session output index (~+10-15pp long sessions)
-
-Every Read/Grep/LS/Glob/Bash output gets indexed into a per-session SQLite FTS5 virtual table. Before re-running a similar query, the hook does a `MATCH` against the prior outputs and surfaces top-3 BM25 hits with snippets and turn numbers as advisory. Different from the exact-input cache: this is fuzzy text search across all prior outputs.
-
-Off by default. Enable per-session:
-
-```
-/atrain-v8p2-on          # flip output_index_enabled
-/atrain-v8p2-off         # revert
-/atrain-recall <query>   # free-text grep over this session's outputs
-```
-
-Trigger criteria for the auto-advisory:
-- Read / Grep / Glob / LS pre-tool
-- output_index_enabled in router-config
-- Derived query >= 3 chars (Grep pattern, Read filename, Glob pattern)
-- FTS5 returns >= 1 hit for this session
-
-Falls back silently if the runtime sqlite lacks FTS5 (T53 also handles this).
-
----
-
-## v8 phase 1: Progressive Read disclosure (~+15-20pp recon-heavy)
-
-First Read of a large source file in a session now returns just the head 60 lines plus a symbol outline (function/class signatures + line numbers). Claude navigates by outline and only re-Reads with explicit `offset` + `limit` when it needs a specific body. Pattern lifted from Mibayy/token-savior. Real claimed gain on tsbench: -77% active tokens/task.
-
-Off by default. Enable per-session:
-
-```
-/atrain-v8-on    # flip progressive_read_enabled = true
-/atrain-v8-off   # revert
-```
-
-Trigger criteria:
-- Read of `.py .js .jsx .ts .tsx .go .rs` only
-- File > 120 lines AND > 4KB
-- No `offset` or `limit` already in the call
-- File not previously outlined this session
-
-Bypassed for:
-- Small files (no benefit)
-- Files already outlined this session (full body next time)
-- Explicit slice requests (user knows what they want)
-
-51 → 52 self-tests. T52 verifies head limit + outline injection + second-Read bypass.
+Privacy: cross-session recall stays scoped to the current project by default (`cross_session_recall_project_only = true` in router-config). To span every project: edit router-config and set that flag false. To nuke history: `rm ~/.claude/router-cache.sqlite`.
 
 ---
 

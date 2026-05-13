@@ -1,8 +1,8 @@
 ---
-description: ATrain smart-on — caveman OFF, normal prose. Use when you want full sentences for explanations, doc writing, or talking with someone over Claude. Routing + cache + index still active.
+description: ATrain normal — caveman OFF, full Claude prose. Use for docs, explanations, prose-heavy work. Routing + cache + index stay active. Switch to max compression with /atrain-terse.
 ---
 
-User invoked `/atrain-smart-on`.
+User invoked `/atrain-normal`.
 
 Switch caveman intensity to **off**. Output reverts to full Claude prose.
 Routing, caching, indexing, sensitive-keyword forcing — all stay on.
@@ -32,14 +32,14 @@ tmp.write_text(json.dumps(cfg, indent=2))
 os.replace(tmp, p)
 
 print("┌──────────────────────────────────────────────────────┐")
-print("│  🎩 ATrain SMART-ON                                  │")
+print("│  ATrain NORMAL                                       │")
 print("├──────────────────────────────────────────────────────┤")
 print("│  Caveman: OFF                                        │")
 print("│  Output: full prose, normal Claude voice             │")
 print("│  Routing, cache, index: still active                 │")
 print("│                                                      │")
 print("│  Use when: writing docs, explaining concepts, prose  │")
-print("│  Switch to max compression: /atrain-dumb-on          │")
+print("│  Switch to max compression: /atrain-terse            │")
 print("└──────────────────────────────────────────────────────┘")
 EOF
 ```
