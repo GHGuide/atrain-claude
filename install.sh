@@ -12,7 +12,7 @@ echo
 mkdir -p \
     "${CLAUDE_HOME}/commands" \
     "${CLAUDE_HOME}/agents" \
-    "${CLAUDE_HOME}/skills/smart-router" \
+    "${CLAUDE_HOME}/skills/atrain" \
     "${CLAUDE_HOME}/hooks"
 
 echo "[1/6] commands  → ${CLAUDE_HOME}/commands/"
@@ -23,9 +23,9 @@ echo "[2/6] agents    → ${CLAUDE_HOME}/agents/"
 cp -v "${SRC_DIR}/.claude/agents/"*.md "${CLAUDE_HOME}/agents/"
 
 echo
-echo "[3/6] skill     → ${CLAUDE_HOME}/skills/smart-router/"
-cp -v "${SRC_DIR}/.claude/skills/smart-router/"*.md \
-    "${CLAUDE_HOME}/skills/smart-router/"
+echo "[3/6] skill     → ${CLAUDE_HOME}/skills/atrain/"
+cp -v "${SRC_DIR}/.claude/skills/atrain/"*.md \
+    "${CLAUDE_HOME}/skills/atrain/"
 
 echo
 echo "[4/6] hook      → ${CLAUDE_HOME}/hooks/"
@@ -102,9 +102,11 @@ echo "────────────────────────�
 echo
 echo "Restart Claude Code. Then in any project, type:"
 echo
-echo "    /router-eco        — 95% accuracy, ~90% tokens saved"
-echo "    /router-balanced   — 99% accuracy, ~50% tokens saved (default)"
-echo "    /router-quality    — 99.9% accuracy, ~20% tokens saved"
+echo "    /atrain ultimate   — max savings, caveman ULTRA output (default)"
+echo "    /atrain regular    — same stack, caveman OFF, readable prose"
+echo "    /atrain off        — disarm everything"
+echo "    /atrain-status     — live stats card"
+echo "    /atrain-autopsy    — project savings on any past transcript"
 echo
 echo "Commands now appear in the slash-command picker globally."
 echo "Subagents recon-haiku / impl-sonnet / api-sonnet / architect-opus /"
