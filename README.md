@@ -150,6 +150,26 @@ tools/
 
 ---
 
+## v8 benchmark (measured, not modeled)
+
+Real numbers from `tools/atrain_v8_projection.py` on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads):
+
+| Layer | Saved (recon layer) |
+|-------|---------------------|
+| Base ATrain only | 0% (ref) |
+| + v8.1 progressive Read | 0.7% |
+| + v8.1 + v8.2 recall | **13.4%** |
+
+Phase 2 recall does the heavy lifting (+12.7pp). Phase 1 progressive Read under-fires on real workloads: only 6 intercepts in 1,932 Reads because many Reads target JSON/MD/short files. Tuning the trigger thresholds is on the v8.3 list.
+
+Project on your own past session before installing:
+
+```
+python3 tools/atrain_v8_projection.py <past-session.jsonl>
+```
+
+---
+
 ## v8 phase 2: FTS5 session output index (~+10-15pp long sessions)
 
 Every Read/Grep/LS/Glob/Bash output gets indexed into a per-session SQLite FTS5 virtual table. Before re-running a similar query, the hook does a `MATCH` against the prior outputs and surfaces top-3 BM25 hits with snippets and turn numbers as advisory. Different from the exact-input cache: this is fuzzy text search across all prior outputs.
