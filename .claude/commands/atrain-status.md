@@ -96,6 +96,19 @@ if total > 80:
     flags.append(f"ℹ Long session ({total} calls). Consider /clear before")
     flags.append("  next unrelated task. Cuts 30-60% off next prompt.")
 
+# v9 feature status — show which optimizations are armed
+v9_flags = []
+def _on_off(key):
+    return "ON " if cfg.get(key, False) else "off"
+v9_flags.append(f"caveman={cfg.get('caveman_intensity','off') or 'off':<5s}")
+v9_flags.append(f"progRead={_on_off('progressive_read_enabled')}")
+v9_flags.append(f"fts5={_on_off('output_index_enabled')}")
+v9_flags.append(f"cross={_on_off('cross_session_recall_enabled')}")
+v9_flags.append(f"memory={_on_off('memory_enabled')}")
+v9_flags.append(f"adv-prune={_on_off('advisory_pruning_enabled')}")
+print(f"│  v9 stack : {' '.join(v9_flags):<48s} │")
+print("├─────────────────────────────────────────────────────────────┤")
+
 if flags:
     print("│  Alerts                                                     │")
     for f in flags:
