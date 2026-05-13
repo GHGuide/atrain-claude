@@ -50,15 +50,31 @@ def main():
     # Map session_id (stem of jsonl) -> project dir (parent name)
     print("Scanning ~/.claude/projects/ ...")
     t0 = time.time()
+    # mtime-based incremental: only re-parse jsonls modified since the
+    # last backfill run. Stored in backfill_meta(last_ts) sidecar table.
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS backfill_meta ("
+            "k TEXT PRIMARY KEY, v REAL)"
+        )
+        row = conn.execute(
+            "SELECT v FROM backfill_meta WHERE k = 'last_ts'"
+        ).fetchone()
+        last_ts = row[0] if row else 0.0
+    finally:
+        conn.close()
+
     mapping = {}
+    scanned = 0
     for jp in proj_root.rglob("*.jsonl"):
+        scanned += 1
+        if jp.stat().st_mtime <= last_ts:
+            continue  # unchanged since last backfill
         sid = jp.stem
-        # session_id -> real cwd (parsed from the first record of the
-        # transcript). Falls back to the parent dir if the field is
-        # absent.
         mapping[sid] = _cwd_from_jsonl(jp)
     elapsed = time.time() - t0
-    print(f"Found {len(mapping)} session -> project mappings "
+    print(f"Scanned {scanned} transcripts, {len(mapping)} new/changed "
           f"in {elapsed:.1f}s")
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
@@ -80,6 +96,13 @@ def main():
         after = conn.execute(
             "SELECT COUNT(*) FROM session_project"
         ).fetchone()[0]
+        # Persist last_ts for next incremental run
+        conn.execute(
+            "INSERT OR REPLACE INTO backfill_meta (k, v) "
+            "VALUES ('last_ts', ?)",
+            (time.time(),),
+        )
+        conn.commit()
     finally:
         conn.close()
 

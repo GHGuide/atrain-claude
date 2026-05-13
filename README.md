@@ -2,7 +2,7 @@
 
 > **Per-call model router for Claude Code. Sends cheap work to Haiku, hard work to Opus, and compresses everything in between.**
 >
-> Real measured savings on real Claude Code sessions: **58–71%** at the same accuracy as all-Opus.
+> Real measured: **62% mean savings** (range 49–75%, stdev 7.5%) across **30 real Claude Code sessions, 6,000+ prompts**. Classifier accuracy 108/108. Reproducible: `python3 tools/atrain_full_efficiency_bench.py`.
 
 [![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
