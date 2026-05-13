@@ -78,19 +78,25 @@ def parse(path):
     return prompts, errors
 
 
-def bench_session(jp):
+def bench_session(jp, stack="base"):
     prompts, errors = parse(jp)
     if not prompts:
         return None
     tier_count = {"haiku": 0, "sonnet": 0, "opus": 0}
     atrain_total = 0.0
     opus_total = 0.0
+    # Caveman factor: full=0.35, ultra=0.20
+    cav_factor = 0.20 if stack == "ultimate" else 0.35
+    # v8.2 recall savings on recon calls (~50% of cost). 18pp marginal
+    # at 30% trust per measured bench. Modeled as flat 9pp reduction
+    # on the ATrain cost since recon is roughly half the workload.
+    v8_recon_multiplier = (1 - 0.18 * 0.5) if stack == "ultimate" else 1.0
     for prompt in prompts:
         m = classify(prompt)
         in_tok = max(50, len(prompt) // 4 + 200)
         out_tok = int(in_tok * 0.6)
-        out_atrain = int(out_tok * 0.35)  # caveman full factor
-        atrain_total += cost(in_tok, out_atrain, m)
+        out_atrain = int(out_tok * cav_factor)
+        atrain_total += cost(in_tok, out_atrain, m) * v8_recon_multiplier
         opus_total += cost(in_tok, out_tok, "opus")
         tier_count[m] += 1
     saved_pct = ((opus_total - atrain_total) / opus_total * 100
@@ -117,6 +123,13 @@ def main():
     ap.add_argument("--min-prompts", type=int, default=10,
                     help="Skip sessions with fewer prompts (filters out "
                          "subagent dispatches that are 1-prompt agents).")
+    ap.add_argument("--stack",
+                    choices=["base", "ultimate"],
+                    default="base",
+                    help="base = caveman full only. "
+                         "ultimate = caveman ultra + v8.2 recall "
+                         "(30%% trust) + v8.2c cross-session +0pp at "
+                         "cold start +18pp on coding-heavy with priors.")
     ap.add_argument("--projects-dir", type=str,
                     default=str(pathlib.Path.home() / ".claude" /
                                "projects"))
@@ -140,7 +153,7 @@ def main():
         if len(rows) >= args.n:
             break
         try:
-            r = bench_session(jp)
+            r = bench_session(jp, stack=args.stack)
             if not r:
                 continue
             if r["prompts"] < args.min_prompts:
@@ -168,6 +181,7 @@ def main():
     print("+--------------------------------------------------------+")
     print("|  ATrain Full Efficiency Bench                           |")
     print("+--------------------------------------------------------+")
+    print(f"|  Stack              : {args.stack:<14s}                  |")
     print(f"|  Sessions benched   : {len(rows):<6d}                          |")
     print(f"|  Total prompts      : {sum(r['prompts'] for r in rows):<6d}                          |")
     print(f"|  Bench wall time    : {elapsed:>5.1f}s                          |")

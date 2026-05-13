@@ -2,7 +2,12 @@
 
 > **Per-call model router for Claude Code. Sends cheap work to Haiku, hard work to Opus, and compresses everything in between.**
 >
-> Real measured: **62% mean savings** (range 49–75%, stdev 7.5%) across **30 real Claude Code sessions, 6,000+ prompts**. Classifier accuracy 108/108. Reproducible: `python3 tools/atrain_full_efficiency_bench.py`.
+> Real measured across 13 real coding sessions, 6,000+ prompts:
+> - `/atrain-go` (base): **62% mean** (49–75% range)
+> - `/atrain-ultimate` (full stack): **73% mean** (64–82% range)
+>
+> Classifier accuracy 108/108. Reproducible:
+> `python3 tools/atrain_full_efficiency_bench.py --stack base|ultimate`
 
 [![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
@@ -70,11 +75,11 @@ Then in Claude Code, pick one of three activation tiers:
 /atrain-ultimate   # base + v8 + caveman ULTRA — ~80-85% ceiling, Tarzan output
 ```
 
-| Tier | Output style | Saves | Use when |
-|------|--------------|-------|----------|
-| `/atrain-go` | Normal Claude prose | 58-71% | Most sessions. Readable. |
-| `/atrain-v8-go` | Normal prose + advisory snippets in context | +8-20pp on top | Power user with prior sessions on the project. |
-| `/atrain-ultimate` | Caveman ultra (Tarzan fragments) | **~80-85% ceiling** | When you only care about cost. Use `/atrain-normal` to switch to prose mid-session for explanations. |
+| Tier | Output style | Saves (measured) | Use when |
+|------|--------------|------------------|----------|
+| `/atrain-go` | Normal Claude prose | **62% mean** (49-75%) | Most sessions. Readable. |
+| `/atrain-v8-go` | Normal prose + advisory snippets | +5-11pp on top of base | Power user with prior sessions on the project. |
+| `/atrain-ultimate` | Caveman ultra (Tarzan fragments) | **73% mean** (64-82%) | When you only care about cost. Use `/atrain-normal` to switch to prose mid-session for explanations. |
 
 Stop: `/atrain-kill` (base) · `/atrain-v8-stop` (v8 only) · `/atrain-normal` (un-caveman).
 
