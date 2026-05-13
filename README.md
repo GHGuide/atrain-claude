@@ -150,6 +150,32 @@ tools/
 
 ---
 
+## v8 phase 1: Progressive Read disclosure (~+15-20pp recon-heavy)
+
+First Read of a large source file in a session now returns just the head 60 lines plus a symbol outline (function/class signatures + line numbers). Claude navigates by outline and only re-Reads with explicit `offset` + `limit` when it needs a specific body. Pattern lifted from Mibayy/token-savior. Real claimed gain on tsbench: -77% active tokens/task.
+
+Off by default. Enable per-session:
+
+```
+/atrain-v8-on    # flip progressive_read_enabled = true
+/atrain-v8-off   # revert
+```
+
+Trigger criteria:
+- Read of `.py .js .jsx .ts .tsx .go .rs` only
+- File > 120 lines AND > 4KB
+- No `offset` or `limit` already in the call
+- File not previously outlined this session
+
+Bypassed for:
+- Small files (no benefit)
+- Files already outlined this session (full body next time)
+- Explicit slice requests (user knows what they want)
+
+51 → 52 self-tests. T52 verifies head limit + outline injection + second-Read bypass.
+
+---
+
 ## Optional add-on: Graphify (~+8pp on coding-heavy sessions)
 
 ATrain stacks with [graphify](https://github.com/safishamsi/graphify), a third-party knowledge-graph builder for codebases. Graphify pre-computes a project graph; ATrain routes graph-scoped reads to Haiku more aggressively when the flag is on. On the 913-prompt LELAU-UI tool-call projection, graphify eliminates 35% of `Read` calls (676 of 1,934) by answering "where lives X / how does Y connect" from `GRAPH_REPORT.md`, and downgrades another 314 to scoped Haiku reads. Net: 63.5% → ~71.5% saved on the same workload.

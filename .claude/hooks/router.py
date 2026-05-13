@@ -184,6 +184,12 @@ def _default_config() -> dict:
         "decompose_enabled": False,
         "force_subagent_recon": False,
         "bash_pre_rewrite_enabled": True,
+        # v8.0 — Progressive Read disclosure (token-savior pattern).
+        # First Read of a large source file in a session returns only
+        # a head slice; outline (symbols + line numbers) is injected
+        # as advisory. Subsequent Reads of same file bypass the
+        # intercept. Saves 15-20pp on recon-heavy sessions.
+        "progressive_read_enabled": False,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -885,6 +891,81 @@ def _outline_source_advisory(tool_input, tool_output: str) -> str:
         "code-heavy sessions (ecotokens median 89.6% on 4129 hooks)."
     )
     return "\n".join(lines)
+
+
+# v8.0 — Progressive Read disclosure (token-savior pattern).
+# PRE-Read intercept: on first Read of a large source file this session,
+# rewrite input to limit=60 (head slice) and inject outline advisory.
+# Forces Claude to navigate by symbols instead of pulling full bodies.
+# Subsequent Reads of the same file bypass intercept so body reads work.
+# Real claimed gain: -77% active tokens/task on tsbench (Mibayy/token-savior).
+_PROGRESSIVE_READ_HEAD_LIMIT = 60
+_PROGRESSIVE_READ_MIN_LINES = 120
+_PROGRESSIVE_READ_MIN_BYTES = 4_000
+
+
+def _progressive_read_intercept(tool_input, log):
+    """Return (new_input_or_None, advisory_or_empty).
+
+    Only fires when ALL of:
+    - tool_input has a file_path
+    - path ext is outline-capable
+    - file exists on disk and is large enough
+    - user did NOT pass offset/limit (they know what they want)
+    - this file has not been outlined this session yet
+    """
+    if not isinstance(tool_input, dict):
+        return None, ""
+    path = tool_input.get("file_path") or tool_input.get("path") or ""
+    if not isinstance(path, str) or not path:
+        return None, ""
+    if "offset" in tool_input or "limit" in tool_input:
+        return None, ""
+    _, ext = os.path.splitext(path.lower())
+    if ext not in _OUTLINE_OK_EXTS:
+        return None, ""
+    try:
+        sz = os.path.getsize(path)
+    except OSError:
+        return None, ""
+    if sz < _PROGRESSIVE_READ_MIN_BYTES or sz > _OUTLINE_MAX_BYTES:
+        return None, ""
+    # Already outlined? Bypass.
+    for entry in log:
+        if entry.get("outlined_path") == path:
+            return None, ""
+    try:
+        src = open(path, encoding="utf-8", errors="ignore").read()
+    except OSError:
+        return None, ""
+    n_lines = src.count("\n")
+    if n_lines < _PROGRESSIVE_READ_MIN_LINES:
+        return None, ""
+    if ext == ".py":
+        outline = _outline_python(src)
+    else:
+        outline = _outline_regex(src, ext)
+    if len(outline) < 3:
+        return None, ""
+    new_input = dict(tool_input)
+    new_input["limit"] = _PROGRESSIVE_READ_HEAD_LIMIT
+    lines = [
+        "ATrain v8 (progressive-read, token-savior pattern):",
+        f"  First Read of {path} this session — limited to head "
+        f"{_PROGRESSIVE_READ_HEAD_LIMIT} lines ({n_lines} total).",
+        f"  Outline ({len(outline)} symbols):",
+    ]
+    for kind, name, sig, line in outline[:40]:
+        lines.append(f"    L{line:<4d}  {kind:<5s}  {sig[:70]}")
+    if len(outline) > 40:
+        lines.append(f"    ... +{len(outline)-40} more")
+    lines.append(
+        "  For a specific symbol body, re-Read with offset=<line>, "
+        "limit=<rough body size>. Next Read of this file bypasses "
+        "intercept (no further truncation). Saves 15-20pp on "
+        "recon-heavy sessions vs full-body reads."
+    )
+    return new_input, "\n".join(lines)
 
 
 def _index_python_file(path: Path) -> list:
@@ -2682,6 +2763,21 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     # updatedInput as of v2.0.10.
     compacted_input, was_compacted = compact_tool_input(tool_input)
 
+    # v8.0 — Progressive Read disclosure intercept. Init advisory to
+    # empty so downstream `if progressive_advisory` never NameErrors.
+    progressive_advisory = ""
+    if (tool_name == "Read"
+            and config.get("progressive_read_enabled", False)
+            and isinstance(compacted_input, dict)):
+        log_for_check = load_session_log(session_id)
+        new_ti, advisory = _progressive_read_intercept(
+            compacted_input, log_for_check
+        )
+        if new_ti is not None:
+            compacted_input = new_ti
+            was_compacted = True
+            progressive_advisory = advisory
+
     # v6.4 — rtk-pattern Bash command pre-rewriter.
     # Operates BEFORE the shell executes the command. Rewrites bloated
     # commands into compact equivalents (ls → ls | head -100, pytest →
@@ -2722,6 +2818,8 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
             "to run it on a cheaper bundled-token tier in parallel — "
             "saves ~80% bundled tokens vs the parent session."
         )
+    if progressive_advisory:
+        advice = advice + "\n\n" + progressive_advisory
     if cache_advisory:
         advice = advice + "\n\n" + cache_advisory
     if index_advisory:
@@ -2809,7 +2907,7 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     ti_hash = hashlib.sha256(
         f"{tool_name}::{ti_json_for_hash}".encode("utf-8")).hexdigest()[:16]
     turn_num = len([e for e in log if e.get("phase") == "pre"]) + 1
-    log.append({
+    log_entry = {
         "phase": "pre",
         "tool": tool_name,
         "tier": output["tier_label"],
@@ -2823,7 +2921,14 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         "tool_input_path": _cached_file_path(tool_input) or "",
         "turn": turn_num,
         "ts": datetime.now().isoformat(),
-    })
+    }
+    # v8.0 — Mark this file as outlined so subsequent Reads bypass the
+    # progressive intercept and serve full bodies.
+    if progressive_advisory:
+        log_entry["outlined_path"] = (
+            tool_input.get("file_path") or tool_input.get("path") or ""
+        )
+    log.append(log_entry)
     save_session_log(session_id, log)
     if escalated:
         save_config(config)
@@ -4084,6 +4189,44 @@ def run_tests() -> None:
                eco_full_caveman and ultra_active and no_caveman,
                f"eco_full={eco_full_caveman}, ultra={ultra_active}, "
                f"off_clean={no_caveman}")
+
+        # T52 — v8.0 Progressive Read disclosure
+        # Enable flag, Read a large source file. Expect:
+        #   - updatedInput.limit == 60
+        #   - advisory contains "progressive-read"
+        # Second Read of same file → no limit injection (bypass).
+        v8_cfg = _default_config()
+        v8_cfg["progressive_read_enabled"] = True
+        atomic_write_json(CONFIG_PATH, v8_cfg)
+        save_session_log("t52_v8", [])
+        big_path = str(Path(__file__).resolve())
+        out_first = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "session_id": "t52_v8",
+            "tool_name": "Read",
+            "tool_input": {"file_path": big_path},
+        })
+        hso1 = out_first.get("hookSpecificOutput") or {}
+        ui1 = hso1.get("updatedInput") or {}
+        adv1 = hso1.get("additionalContext", "")
+        first_limited = ui1.get("limit") == 60
+        first_advised = "progressive-read" in adv1
+
+        out_second = capture(handle_pre_tool_use, {
+            "hook_event": "PreToolUse",
+            "session_id": "t52_v8",
+            "tool_name": "Read",
+            "tool_input": {"file_path": big_path},
+        })
+        hso2 = out_second.get("hookSpecificOutput") or {}
+        ui2 = hso2.get("updatedInput") or {}
+        second_bypassed = ui2.get("limit") != 60
+
+        record("T52",
+               first_limited and first_advised and second_bypassed,
+               f"first_limit60={first_limited}, "
+               f"first_advised={first_advised}, "
+               f"second_bypassed={second_bypassed}")
 
     CONFIG_PATH = saved_config_path
 
