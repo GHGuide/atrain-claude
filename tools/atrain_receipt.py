@@ -41,7 +41,20 @@ def render_svg(stats: dict, mode: str = "balanced") -> str:
     bar_w = 540
     fill_w = int(min(saved_pct, 100) / 100 * bar_w)
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="700" height="380" viewBox="0 0 700 380">
+    # v9.5 — tier mix breakdown bar (3-segment: Haiku/Sonnet/Opus)
+    calls = stats.get("calls_by_tier", {}) or {}
+    haiku_n = sum(v for k, v in calls.items() if k.startswith("haiku"))
+    sonnet_n = sum(v for k, v in calls.items() if k.startswith("sonnet"))
+    opus_n = sum(v for k, v in calls.items() if k.startswith("opus"))
+    tier_total = max(1, haiku_n + sonnet_n + opus_n)
+    h_w = int(haiku_n / tier_total * bar_w)
+    s_w = int(sonnet_n / tier_total * bar_w)
+    o_w = bar_w - h_w - s_w  # remainder catches rounding
+    h_pct = haiku_n / tier_total * 100
+    s_pct = sonnet_n / tier_total * 100
+    o_pct = opus_n / tier_total * 100
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="700" height="400" viewBox="0 0 700 400">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#0f172a"/>
@@ -52,8 +65,8 @@ def render_svg(stats: dict, mode: str = "balanced") -> str:
       <stop offset="100%" stop-color="#34d399"/>
     </linearGradient>
   </defs>
-  <rect width="700" height="380" rx="20" fill="url(#bg)"/>
-  <rect x="20" y="20" width="660" height="340" rx="14"
+  <rect width="700" height="400" rx="20" fill="url(#bg)"/>
+  <rect x="20" y="20" width="660" height="360" rx="14"
         fill="none" stroke="#334155" stroke-width="1"/>
 
   <text x="50" y="70" fill="#f1f5f9" font-family="ui-monospace,Menlo,monospace"
@@ -69,10 +82,22 @@ def render_svg(stats: dict, mode: str = "balanced") -> str:
   <rect x="50" y="225" width="{bar_w}" height="20" rx="10" fill="#1e293b"/>
   <rect x="50" y="225" width="{fill_w}" height="20" rx="10" fill="url(#bar)"/>
 
-  <text x="50" y="295" fill="#cbd5e1" font-family="ui-monospace,Menlo,monospace"
+  <!-- v9.5: tier mix bar (Haiku / Sonnet / Opus) -->
+  <rect x="50" y="260" width="{bar_w}" height="10" rx="5" fill="#1e293b"/>
+  <rect x="50" y="260" width="{h_w}" height="10" rx="5" fill="#10b981"/>
+  <rect x="{50 + h_w}" y="260" width="{s_w}" height="10" fill="#3b82f6"/>
+  <rect x="{50 + h_w + s_w}" y="260" width="{o_w}" height="10" rx="5" fill="#a855f7"/>
+  <text x="50" y="285" fill="#94a3b8"
+        font-family="ui-monospace,Menlo,monospace" font-size="11">
+    <tspan fill="#10b981">█ Haiku {h_pct:.0f}%</tspan> <tspan>·</tspan>
+    <tspan fill="#3b82f6">█ Sonnet {s_pct:.0f}%</tspan> <tspan>·</tspan>
+    <tspan fill="#a855f7">█ Opus {o_pct:.0f}%</tspan>
+  </text>
+
+  <text x="50" y="315" fill="#cbd5e1" font-family="ui-monospace,Menlo,monospace"
         font-size="14">{total} tool calls · ${cost:.2f} actual · ${base:.2f} baseline</text>
 
-  <text x="50" y="335" fill="#64748b" font-family="ui-monospace,Menlo,monospace"
+  <text x="50" y="355" fill="#64748b" font-family="ui-monospace,Menlo,monospace"
         font-size="12">github.com/LeonardoCalancea/atrain-claude · /atrain-receipt</text>
 </svg>"""
 
