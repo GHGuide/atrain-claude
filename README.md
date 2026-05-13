@@ -178,9 +178,19 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ---
 
-## v8 phase 2b: Cross-session recall
+## v8 phase 2b: Cross-session recall (measured: +18-33pp)
 
 router-cache.sqlite holds outputs from **every** past Claude Code session you've run. Phase 2b drops the `WHERE session_id = ?` filter on the recall query so the advisory surfaces hits from prior sessions too — tagged with `sess=<id8>` so you can see which session a hit came from.
+
+Bench on the LELAU-UI 913-prompt target with N prior sessions indexed:
+
+| N priors | Hit rate | Saved @ 30% trust | @ 50% | @ 70% |
+|----------|----------|-------------------|-------|-------|
+| 20 | 34.5% | +18.6pp | +31.1pp | +31.9pp |
+| 100 | 34.7% | +18.7pp | +31.1pp | +31.9pp |
+| 200 | **98.3%** | **+33.1pp** | **+50.9pp** | **+57.4pp** |
+
+The jump at N=200 reflects the long-tail effect: a power user with months of history accumulates many sessions on the same project, so almost every Read/Grep query has prior coverage. Run `tools/atrain_cross_session_bench.py` against your own history.
 
 Privacy caveat: the index spans every project. Off by default. Turn on with:
 
