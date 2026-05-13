@@ -81,13 +81,12 @@ Then in Claude Code:
 /atrain off        # disarm everything
 ```
 
-## All four commands
+## All three commands
 
 | Command | Purpose |
 |---------|---------|
 | `/atrain [ultimate\|regular\|off]` | Activate or stop the stack. Defaults to `ultimate`. |
 | `/atrain-status` | Live session card — cost, accuracy, tier mix, flag state. |
-| `/atrain-memory <add\|del\|list\|search>` | Curated cross-session memory CRUD. |
 | `/atrain-autopsy [<jsonl>]` | Project savings on any past transcript. |
 
 ---
@@ -151,7 +150,7 @@ tools/
 ```
 
 - Pure stdlib Python (no torch, no transformers, no API keys)
-- SQLite caches: tool-result cache + symbol index + route_failures + session memory
+- SQLite caches: tool-result cache + symbol index + route_failures
 - `fcntl.flock` for race-safe concurrent config writes
 - AST + regex for codebase indexing (Python `ast`, JS/TS/Go/Rust regex)
 - Multi-language compile-aware verification (`.py`, `.json`, `.js`, `.ts`, `.go`, `.rs`, `.sh`, `.yaml`, `.toml`)
@@ -207,23 +206,8 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 | Progressive Read | First Read of a large source file → head 60 lines + symbol outline | +0.9pp (capped) |
 | Within-session FTS5 | Index every tool output, advisory on near-duplicate queries | +18–28pp |
 | Cross-session same-project | Same advisory but scoped across **all your prior sessions in this project** (privacy + accuracy win) | +20–33pp (98% hit on 6 benched targets) |
-| Curated memory | Manual project-scoped notes that surface on matching UserPromptSubmit | qualitative |
-
-Curated memory:
-
-```
-/atrain-memory add decision use the retry-with-backoff helper, not raw fetch
-/atrain-memory list                       # show this project's memories
-/atrain-memory del <id>                       # delete one
-```
-
-Categories: `decision | bugfix | convention | lesson | note`. Project-scoped via `os.getcwd()`. Cross-project leakage impossible.
 
 Inspect prior tool outputs from any of your past sessions on this project:
-
-```
-/atrain-memory search <query>
-```
 
 Project the gain on your own past session before turning anything on:
 
@@ -232,7 +216,7 @@ python3 tools/atrain_v8_projection.py --skip-prob 0.50 <past.jsonl>
 python3 tools/atrain_cross_session_bench.py --target <past.jsonl> --same-project-only
 ```
 
-55/55 self-tests covering: progressive Read intercept + bypass (T52), within-session recall + snippet surfacing (T53), cross-session sess-tag (T54), curated memory round-trip (T55).
+55/55 self-tests covering: progressive Read intercept + bypass (T52), within-session recall + snippet surfacing (T53), cross-session sess-tag (T54).
 
 ---
 

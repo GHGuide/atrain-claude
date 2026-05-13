@@ -26,7 +26,6 @@ if arg in ("off", "kill", "stop"):
     cfg["progressive_read_enabled"] = False
     cfg["output_index_enabled"] = False
     cfg["cross_session_recall_enabled"] = False
-    cfg["memory_enabled"] = False
     cfg["advisory_pruning_enabled"] = False
     cfg["caveman_intensity"] = None
     cfg["decompose_enabled"] = False
@@ -47,7 +46,6 @@ cfg["progressive_read_enabled"] = True
 cfg["output_index_enabled"] = True
 cfg["cross_session_recall_enabled"] = True
 cfg["cross_session_recall_project_only"] = True
-cfg["memory_enabled"] = True
 cfg["advisory_pruning_enabled"] = True
 cfg["advisory_budget_chars"] = 1500
 
@@ -111,7 +109,7 @@ print("+----------------------------------------------------------+")
 print(f"|  Style: {style_note[:48]:<48s} |")
 print("|  Routing per-call, decompose, bash-rewrite               |")
 print("|  v8: progressive Read, FTS5 recall, same-project cross   |")
-print("|       session, curated memory, advisory pruning          |")
+print("|       session, advisory pruning                          |")
 print(f"|  Priors this project : {prior_count:<33d} |")
 print("+----------------------------------------------------------+")
 print("|  Switch readable: /atrain regular                        |")
