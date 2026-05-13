@@ -76,22 +76,19 @@ bash install.sh
 Then in Claude Code:
 
 ```
-/atrain ultimate   # max savings (default if no arg) — caveman ULTRA, full v8 stack
-/atrain v8         # power-user stack, readable prose
-/atrain base       # router only, no v8 features
+/atrain ultimate   # max savings (default) — full stack + caveman ULTRA
+/atrain regular    # same full stack, caveman OFF — readable prose
 /atrain off        # disarm everything
 ```
 
-## All six commands
+## All four commands
 
 | Command | Purpose |
 |---------|---------|
-| `/atrain [ultimate\|v8\|base\|off]` | Activate or stop the stack. Defaults to `ultimate`. |
-| `/atrain-status` | Live session card — cost, accuracy, tier mix, v9 flag state. |
-| `/atrain-style <terse\|normal>` | Toggle caveman ULTRA vs full prose output. |
+| `/atrain [ultimate\|regular\|off]` | Activate or stop the stack. Defaults to `ultimate`. |
+| `/atrain-status` | Live session card — cost, accuracy, tier mix, flag state. |
 | `/atrain-memory <add\|del\|list\|search>` | Curated cross-session memory CRUD. |
 | `/atrain-autopsy [<jsonl>]` | Project savings on any past transcript. |
-| `/atrain-graphify` | Optional graphify knowledge-graph integration. |
 
 ---
 
@@ -203,7 +200,7 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ## v8 power-user stack — one command
 
-`/atrain v8` flips four features at once + runs a one-time session→project backfill. `/atrain off` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
+`/atrain regular` or `/atrain ultimate` flips all v8 features at once + runs the one-time session→project backfill. `/atrain off` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
 
 | Feature | What it does | Measured |
 |---------|--------------|----------|
@@ -263,28 +260,6 @@ python3 tools/atrain_cross_session_bench.py \
 ```
 
 Privacy: cross-session recall stays scoped to the current project by default (`cross_session_recall_project_only = true` in router-config). To span every project: edit router-config and set that flag false. To nuke history: `rm ~/.claude/router-cache.sqlite`.
-
----
-
-## Optional add-on: Graphify (~+8pp on coding-heavy sessions)
-
-ATrain stacks with [graphify](https://github.com/safishamsi/graphify), a third-party knowledge-graph builder for codebases. Graphify pre-computes a project graph; ATrain routes graph-scoped reads to Haiku more aggressively when the flag is on. On the 913-prompt LELAU-UI tool-call projection, graphify eliminates 35% of `Read` calls (676 of 1,934) by answering "where lives X / how does Y connect" from `GRAPH_REPORT.md`, and downgrades another 314 to scoped Haiku reads. Net: 63.5% → ~71.5% saved on the same workload.
-
-Not bundled — graphify needs ~25 tree-sitter pip deps, which would break ATrain's stdlib-only install promise. Opt in:
-
-```bash
-# one-time
-uv tool install graphifyy   # or: pipx install graphifyy
-
-# inside Claude Code, in your project root
-/atrain-graphify
-```
-
-The slash command builds the graph, registers graphify's Claude Code hook, flips ATrain's `graph_aware` flag, and whitelists `graphify` from bash output rewrite. Project the gain on a past transcript before installing:
-
-```bash
-python3 tools/atrain_graphify_toolcall.py <past-session.jsonl>
-```
 
 ---
 
