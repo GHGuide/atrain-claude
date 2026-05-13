@@ -208,6 +208,11 @@ def _default_config() -> dict:
         # accuracy WIN (98% hit rate, no noise). Set false to span
         # every project.
         "cross_session_recall_project_only": True,
+        # v8.0 Phase 3 — curated cross-session memory. UserPromptSubmit
+        # queries memory_entries (FTS5) for matches scoped to current
+        # project, surfaces top 2 hits as advisory. Decisions, bugfixes,
+        # conventions, lessons-learned persist across sessions.
+        "memory_enabled": False,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -828,7 +833,8 @@ _OUTLINE_OK_EXTS = (
     ".kt", ".swift", ".php", ".lua", ".md", ".mdx",
 )
 _OUTLINE_MIN_LINES = 80  # don't compress small files
-_OUTLINE_MAX_BYTES = 200_000
+_OUTLINE_MAX_BYTES = 500_000  # bumped 200k -> 500k (router.py crossed
+# threshold; bigger source files still benefit from outline)
 
 
 def _outline_python(src: str) -> list:
@@ -1281,6 +1287,50 @@ def _cache_conn():
         "CREATE TABLE IF NOT EXISTS session_project ("
         "session_id TEXT PRIMARY KEY, project_dir TEXT)"
     )
+    # v8.0 Phase 3 — curated cross-session memory. Decisions, bugfixes,
+    # conventions, lessons-learned that persist across sessions and
+    # surface as UserPromptSubmit advisory when a new prompt matches.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_entries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "project_dir TEXT, "
+        "category TEXT, "
+        "text TEXT, "
+        "ts REAL, "
+        "hit_count INTEGER DEFAULT 0, "
+        "weight REAL DEFAULT 1.0)"
+    )
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS memory_idx "
+            "USING fts5(text, content='memory_entries', "
+            "content_rowid='id', "
+            "tokenize='unicode61 remove_diacritics 2')"
+        )
+        # Sync triggers so FTS5 stays current
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS memory_ai "
+            "AFTER INSERT ON memory_entries BEGIN "
+            "INSERT INTO memory_idx(rowid, text) "
+            "VALUES (new.id, new.text); END"
+        )
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS memory_ad "
+            "AFTER DELETE ON memory_entries BEGIN "
+            "INSERT INTO memory_idx(memory_idx, rowid, text) "
+            "VALUES('delete', old.id, old.text); END"
+        )
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS memory_au "
+            "AFTER UPDATE ON memory_entries BEGIN "
+            "INSERT INTO memory_idx(memory_idx, rowid, text) "
+            "VALUES('delete', old.id, old.text); "
+            "INSERT INTO memory_idx(rowid, text) "
+            "VALUES (new.id, new.text); END"
+        )
+    except sqlite3.OperationalError:
+        # FTS5 missing — memory_entries still queryable via LIKE
+        pass
     return conn
 
 
@@ -1597,6 +1647,105 @@ def output_index_search(session_id: str, query: str,
     return [
         {"tool": r[0], "file_path": r[1], "snippet": r[2],
          "turn": r[3], "ts": r[4], "session_id": r[5]}
+        for r in rows
+    ]
+
+
+# v8.0 Phase 3 — curated cross-session memory helpers ─────────────────
+def memory_add(project_dir: str, category: str, text: str) -> int:
+    """Insert one memory entry. Returns the new row id or -1 on error."""
+    if not text or len(text) > 4000:
+        return -1
+    cat = category.lower().strip()
+    if cat not in ("decision", "bugfix", "convention", "lesson", "note"):
+        cat = "note"
+    try:
+        conn = _cache_conn()
+        try:
+            cur = conn.execute(
+                "INSERT INTO memory_entries "
+                "(project_dir, category, text, ts) "
+                "VALUES (?, ?, ?, ?)",
+                (project_dir, cat, text[:4000], time.time()),
+            )
+            new_id = cur.lastrowid or -1
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return -1
+    return int(new_id)
+
+
+def memory_forget(entry_id: int) -> bool:
+    try:
+        conn = _cache_conn()
+        try:
+            cur = conn.execute(
+                "DELETE FROM memory_entries WHERE id = ?",
+                (entry_id,),
+            )
+            removed = (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return removed
+
+
+def memory_search(project_dir: str, query: str,
+                  limit: int = 2) -> list:
+    """Return list of {id, category, text, hit_count, weight} for memory
+    entries matching the query scoped to project_dir. Uses FTS5 MATCH
+    with OR semantics (any token match) so a long prompt with a few
+    rare terms still surfaces the right memory entry. Falls back to
+    LIKE if FTS5 unavailable."""
+    # Build OR-joined quoted token query. FTS5 default is AND;
+    # memory recall wants any-token-match, not all-token-match.
+    cleaned = query.replace("\\", " ").replace('"', " ").replace("?", " ")
+    toks = [t for t in cleaned.split() if len(t) >= 3][:8]
+    if not toks:
+        return []
+    q = " OR ".join('"%s"' % t for t in toks)
+    try:
+        conn = _cache_conn()
+        try:
+            try:
+                # FTS5 MATCH requires the table name unaliased.
+                rows = conn.execute(
+                    "SELECT m.id, m.category, m.text, m.hit_count, "
+                    "m.weight "
+                    "FROM memory_entries m, memory_idx "
+                    "WHERE memory_idx MATCH ? "
+                    "  AND m.id = memory_idx.rowid "
+                    "  AND m.project_dir = ? "
+                    "ORDER BY bm25(memory_idx) "
+                    "LIMIT ?",
+                    (q, project_dir, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                like = "%" + query.replace("%", "").replace("_", "")[:80] + "%"
+                rows = conn.execute(
+                    "SELECT id, category, text, hit_count, weight "
+                    "FROM memory_entries "
+                    "WHERE project_dir = ? AND text LIKE ? "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (project_dir, like, limit),
+                ).fetchall()
+            if rows:
+                ids = [r[0] for r in rows]
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE memory_entries SET hit_count = hit_count + 1 "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                )
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return [
+        {"id": r[0], "category": r[1], "text": r[2],
+         "hit_count": r[3], "weight": r[4]}
         for r in rows
     ]
 
@@ -2608,6 +2757,32 @@ def handle_user_prompt_submit(data: dict) -> None:
     is_multi, signals = detect_multi_faceted(prompt)
 
     parts = []
+    # v8.0 Phase 3 — curated memory recall on user prompt.
+    # Query memory_entries (FTS5) scoped to current project, surface top
+    # 2 matches as advisory. Decisions/bugfixes/conventions persist
+    # across sessions for repeat-task savings.
+    if config.get("memory_enabled", False) and len(prompt) >= 4:
+        mem_hits = memory_search(os.getcwd(), prompt, limit=2)
+        if mem_hits:
+            lines = [
+                "ATrain v8 Phase 3 (curated memory — token-savior pattern):",
+                f"  {len(mem_hits)} prior memory entr"
+                f"{'ies' if len(mem_hits) != 1 else 'y'} for this project "
+                "match your prompt:",
+            ]
+            for h in mem_hits:
+                txt = (h["text"] or "").replace("\n", " ")[:240]
+                lines.append(
+                    f"    [{h['category']:<10s}]  hits={h['hit_count']:<3d}  "
+                    f"{txt}"
+                )
+            lines.append(
+                "  Apply these if relevant. Add new memories with "
+                "/atrain-remember <category> <text>. Remove with "
+                "/atrain-forget <id>."
+            )
+            parts.append("\n".join(lines))
+
     # v6.5 — full caveman pattern injection (ported from JuliusBrussee/caveman).
     # Eco mode triggers FULL intensity; user can override via
     # config.caveman_intensity (lite|full|ultra). Real measured 65-75%
@@ -4566,6 +4741,44 @@ def run_tests() -> None:
                    f"marker_present={marker_present}")
         except sqlite3.OperationalError as exc:
             record("T54", True,
+                   f"FTS5 unavailable, skipped: {exc!s}")
+
+        # T55 — v8.0 Phase 3 curated cross-session memory
+        # Add a memory under cwd, run UserPromptSubmit with a matching
+        # prompt, assert advisory surfaces the memory entry.
+        v8p3_cfg = _default_config()
+        v8p3_cfg["memory_enabled"] = True
+        atomic_write_json(CONFIG_PATH, v8p3_cfg)
+        save_session_log("t55_v8p3", [])
+        try:
+            mem_id = memory_add(
+                os.getcwd(),
+                "decision",
+                "use_unique_marker_atrain_v8_phase3_test for routing test",
+            )
+            out_t55 = capture(handle_user_prompt_submit, {
+                "hook_event": "UserPromptSubmit",
+                "session_id": "t55_v8p3",
+                "prompt": "how do we handle "
+                          "use_unique_marker_atrain_v8_phase3_test today?",
+            })
+            ctx55 = (out_t55.get("hookSpecificOutput") or {}).get(
+                "additionalContext", "")
+            memory_fired = "curated memory" in ctx55
+            decision_present = "[decision  ]" in ctx55
+            marker_present = (
+                "use_unique_marker_atrain_v8_phase3_test" in ctx55
+            )
+            cleanup_ok = memory_forget(mem_id) if mem_id > 0 else True
+            record("T55",
+                   memory_fired and decision_present and marker_present
+                   and cleanup_ok,
+                   f"memory_fired={memory_fired}, "
+                   f"decision_present={decision_present}, "
+                   f"marker_present={marker_present}, "
+                   f"cleanup_ok={cleanup_ok}")
+        except sqlite3.OperationalError as exc:
+            record("T55", True,
                    f"FTS5 unavailable, skipped: {exc!s}")
 
     CONFIG_PATH = saved_config_path

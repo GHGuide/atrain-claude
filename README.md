@@ -178,6 +178,28 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ---
 
+## v8 phase 3: Curated cross-session memory
+
+Per-project memory store for decisions, bugfixes, conventions, lessons-learned. Persists across sessions in `~/.claude/router-cache.sqlite`. On every UserPromptSubmit, the hook runs an FTS5 OR-match against the project's memory entries and surfaces top-2 hits as advisory.
+
+Different from Phase 2/2c: those grep raw tool outputs. Phase 3 stores **curated text** that you intentionally write. Use for tribal knowledge that Claude needs to know on every session start.
+
+```
+/atrain-memory-on                         # enable advisory injection
+/atrain-remember decision use the         # add a memory
+  retry-with-backoff helper, not the
+  raw fetch loop — see issue #42
+/atrain-memory-list                       # show this project's memories
+/atrain-forget <id>                       # delete one
+/atrain-memory-off                        # stop surfacing (entries kept)
+```
+
+Categories: `decision | bugfix | convention | lesson | note`. Entries are project-scoped via `os.getcwd()`; cross-project leakage is impossible. Hit count is tracked per entry.
+
+T55 covers the round-trip: add → UserPromptSubmit with matching prompt → assert advisory surfaces the entry with category + text. 55/55 self-tests pass.
+
+---
+
 ## v8 phase 2b: Cross-session recall (measured: +18-33pp)
 
 router-cache.sqlite holds outputs from **every** past Claude Code session you've run. Phase 2b drops the `WHERE session_id = ?` filter on the recall query so the advisory surfaces hits from prior sessions too — tagged with `sess=<id8>` so you can see which session a hit came from.
