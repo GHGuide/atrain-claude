@@ -809,7 +809,12 @@ def _index_conn():
 # context didn't request a body-level answer. Saves 12-25% on code-
 # heavy sessions. Reuses _index_python_file AST + _index_regex_file
 # patterns. Per ecotokens benchmark: 89.6% reduction across 4129 hooks.
-_OUTLINE_OK_EXTS = (".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs")
+_OUTLINE_OK_EXTS = (
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
+    # v8.1 tuning — broaden coverage based on real-workload bench
+    ".rb", ".java", ".c", ".cpp", ".h", ".hpp", ".cs",
+    ".kt", ".swift", ".php", ".lua", ".md", ".mdx",
+)
 _OUTLINE_MIN_LINES = 80  # don't compress small files
 _OUTLINE_MAX_BYTES = 200_000
 
@@ -846,6 +851,41 @@ def _outline_regex(src: str, ext: str) -> list:
             out.append(("fn", m.group(1), m.group(0).strip(), line))
     elif ext == ".rs":
         for m in _RS_RE.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip(), line))
+    elif ext in (".md", ".mdx"):
+        # Markdown headers as outline (H1-H4)
+        for m in re.finditer(r"^(#{1,4})\s+(.+)$", src, re.MULTILINE):
+            line = src[:m.start()].count("\n") + 1
+            depth = len(m.group(1))
+            out.append((f"h{depth}", m.group(2)[:60],
+                        m.group(0).strip()[:80], line))
+    elif ext in (".rb",):
+        for m in re.finditer(
+            r"^\s*(?:def|class|module)\s+([A-Za-z_][\w:]*)",
+            src, re.MULTILINE):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip(), line))
+    elif ext in (".java", ".kt", ".cs", ".swift"):
+        for m in re.finditer(
+            r"^\s*(?:public|private|protected|static|fun|func|"
+            r"final|abstract|\s)+\s*"
+            r"(?:[\w<>?,\s\[\]]+\s+)?"
+            r"([A-Za-z_]\w*)\s*\(",
+            src, re.MULTILINE):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip()[:80], line))
+    elif ext in (".c", ".cpp", ".h", ".hpp"):
+        # Loose C/C++ function regex: type name(args) {
+        for m in re.finditer(
+            r"^\s*(?:[\w*&:<>]+\s+){1,3}([a-zA-Z_]\w*)\s*\([^;]*\)\s*\{",
+            src, re.MULTILINE):
+            line = src[:m.start()].count("\n") + 1
+            out.append(("fn", m.group(1), m.group(0).strip()[:80], line))
+    elif ext in (".php", ".lua"):
+        for m in re.finditer(
+            r"(?:^|\s)(?:function)\s+([A-Za-z_]\w*)",
+            src, re.MULTILINE):
             line = src[:m.start()].count("\n") + 1
             out.append(("fn", m.group(1), m.group(0).strip(), line))
     return sorted(out, key=lambda t: t[3])
@@ -906,8 +946,10 @@ def _outline_source_advisory(tool_input, tool_output: str) -> str:
 # Subsequent Reads of the same file bypass intercept so body reads work.
 # Real claimed gain: -77% active tokens/task on tsbench (Mibayy/token-savior).
 _PROGRESSIVE_READ_HEAD_LIMIT = 60
-_PROGRESSIVE_READ_MIN_LINES = 120
-_PROGRESSIVE_READ_MIN_BYTES = 4_000
+# v8.1 tuning round 1 — bench showed 120/4KB under-fires (only 6 hits
+# in 1932 LELAU Reads). Drop to 80 lines / 2KB to catch mid-size files.
+_PROGRESSIVE_READ_MIN_LINES = 80
+_PROGRESSIVE_READ_MIN_BYTES = 2_000
 
 
 def _progressive_read_intercept(tool_input, log):

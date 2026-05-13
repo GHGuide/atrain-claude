@@ -65,7 +65,12 @@ def parse(path):
     return events
 
 
-OUTLINE_EXT = (".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs")
+OUTLINE_EXT = (
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
+    ".rb", ".java", ".c", ".cpp", ".h", ".hpp", ".cs",
+    ".kt", ".swift", ".php", ".lua", ".md", ".mdx",
+)
+MIN_LINES = 80            # tuning round 1: 120 -> 80
 PHASE1_SAVE_RATE = 0.75   # 75% token reduction on first big Read
 PHASE2_SKIP_PROB = 0.30   # 30% of recall-eligible calls eliminated
 
@@ -117,7 +122,7 @@ def main():
             n_lines = out_text.count("\n")
             if (ext in OUTLINE_EXT
                     and not has_offset
-                    and n_lines >= 120
+                    and n_lines >= MIN_LINES
                     and path not in seen_paths):
                 p1_cost = int(out_tokens * (1 - PHASE1_SAVE_RATE))
                 n_progressive_intercepts += 1
@@ -134,8 +139,12 @@ def main():
             if len(query) >= 3:
                 prior = "\n".join(all_output_text[-200:])
                 if query in prior:
-                    # 30% chance Claude trusts recall and skips
-                    bucket = (hash(query) & 0xFF) / 255.0
+                    # 30% chance Claude trusts recall and skips.
+                    # Deterministic hash via md5 so re-runs are stable;
+                    # Python's hash() is salted per process.
+                    import hashlib
+                    h = hashlib.md5(query.encode("utf-8")).digest()
+                    bucket = h[0] / 255.0
                     if bucket < PHASE2_SKIP_PROB:
                         p1p2_cost = 0
                         n_recall_skips += 1

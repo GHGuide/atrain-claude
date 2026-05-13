@@ -152,15 +152,15 @@ tools/
 
 ## v8 benchmark (measured, not modeled)
 
-Real numbers from `tools/atrain_v8_projection.py` on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads):
+Deterministic numbers from `tools/atrain_v8_projection.py` (md5 seed, stable across re-runs) on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads):
 
 | Layer | Saved (recon layer) |
 |-------|---------------------|
 | Base ATrain only | 0% (ref) |
-| + v8.1 progressive Read | 0.7% |
-| + v8.1 + v8.2 recall | **13.4%** |
+| + v8.1 progressive Read | 0.9% |
+| + v8.1 + v8.2 recall | **18.4%** |
 
-Phase 2 recall does the heavy lifting (+12.7pp). Phase 1 progressive Read under-fires on real workloads: only 6 intercepts in 1,932 Reads because many Reads target JSON/MD/short files. Tuning the trigger thresholds is on the v8.3 list.
+Phase 2 FTS5 recall does all the work (+17.5pp marginal). Phase 1 progressive Read is structurally capped at ~1pp on this workload: most Reads target small files, already-seen files (correct cache behavior), or non-outline file types. Lowering thresholds (120→80 lines, 4KB→2KB, +13 more exts) lifted intercepts only 6→10. Phase 1 is kept because it costs nothing, but the headline gain is Phase 2 alone.
 
 Project on your own past session before installing:
 
