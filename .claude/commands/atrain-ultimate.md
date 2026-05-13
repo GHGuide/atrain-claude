@@ -127,6 +127,11 @@ cfg["cross_session_recall_enabled"] = fts5_ok
 cfg["cross_session_recall_project_only"] = True
 cfg["memory_enabled"] = fts5_ok
 
+# v9 — Selective Context advisory pruning (Li 2023, arxiv 2310.06201).
+# Drops low-info advisory lines when total exceeds budget. Pure stdlib.
+cfg["advisory_pruning_enabled"] = True
+cfg["advisory_budget_chars"] = 1500
+
 # 5. Graphify integration if installed
 graphify_bin = shutil.which("graphify")
 graphify_status = "n/a (not installed)"

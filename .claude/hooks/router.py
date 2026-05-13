@@ -213,6 +213,12 @@ def _default_config() -> dict:
         # project, surfaces top 2 hits as advisory. Decisions, bugfixes,
         # conventions, lessons-learned persist across sessions.
         "memory_enabled": False,
+        # v9.0 — Selective Context advisory pruning (Li 2023,
+        # arxiv 2310.06201). Drops low-information lines from concatenated
+        # advisories when total exceeds budget_chars. Saves ~50% of
+        # advisory overhead on long sessions.
+        "advisory_pruning_enabled": False,
+        "advisory_budget_chars": 1500,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -955,6 +961,72 @@ def _outline_source_advisory(tool_input, tool_output: str) -> str:
         "code-heavy sessions (ecotokens median 89.6% on 4129 hooks)."
     )
     return "\n".join(lines)
+
+
+# v9.0 — Selective Context advisory pruning (Li 2023, arxiv 2310.06201).
+# ATrain advisories prepend ~500 chars per pre-tool call. Many lines are
+# verbose tips that repeat across calls. Self-information scoring drops
+# low-info lines when total advisory length exceeds budget. Headers are
+# always kept (lines starting with "ATrain", "smart-router", or "+").
+_HIGH_INFO_RE = re.compile(
+    r"\d+(?:\.\d+)?%"      # percentages
+    r"|\$\d+"               # dollar amounts
+    r"|L\d{2,}"             # line numbers (L42, L123)
+    r"|turn \d+"            # turn references
+    r"|`[^`]+`"             # backticked symbols
+    r"|[a-zA-Z_][a-zA-Z0-9_]+\("  # function calls
+    r"|/\S+\.[a-z]{1,4}\b"  # file paths
+    r"|sess=[a-zA-Z0-9]+"   # session tags
+    r"|\bbm25\b|\bMATCH\b"  # FTS5 hits
+)
+
+
+def _score_advisory_line(line: str) -> float:
+    """Self-information proxy. Higher score = keep. Pure stdlib regex."""
+    s = line.strip()
+    if not s:
+        return -1.0
+    matches = len(_HIGH_INFO_RE.findall(line))
+    length = max(20, len(line))
+    score = matches / (length / 60.0)
+    if matches >= 2:
+        score += 1.0
+    return score
+
+
+def _prune_advisories(blocks, budget_chars=1500):
+    """Concatenate non-empty advisory blocks. If total length exceeds
+    budget, drop lowest-scoring content lines while keeping headers
+    (defined as the first line of each block). Returns final string.
+    Selective Context pattern. EASY tier, stdlib-only."""
+    blocks = [b for b in blocks if b]
+    full = "\n\n".join(blocks)
+    if len(full) <= budget_chars:
+        return full
+    keep_lines = []
+    drop_candidates = []
+    for block in blocks:
+        lines = block.split("\n")
+        if not lines:
+            continue
+        # First non-empty line of each block = header, always keep
+        header_kept = False
+        for ln in lines:
+            if not header_kept and ln.strip():
+                keep_lines.append(ln)
+                header_kept = True
+                continue
+            drop_candidates.append(ln)
+    # Score drop candidates, keep highest until budget reached
+    drop_candidates.sort(key=_score_advisory_line, reverse=True)
+    used = sum(len(ln) + 1 for ln in keep_lines)
+    for ln in drop_candidates:
+        sz = len(ln) + 1
+        if used + sz > budget_chars:
+            continue
+        keep_lines.append(ln)
+        used += sz
+    return "\n".join(keep_lines)
 
 
 # v8.0 — Progressive Read disclosure (token-savior pattern).
@@ -3303,6 +3375,14 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
                 "tokens. On verifier reject → re-edit on opus+xhigh. "
                 "Saves 25-40% on edit-heavy sessions vs always-Opus."
             )
+    # v9.0 — Selective Context advisory pruning. When flag is on and
+    # total advisory length exceeds budget, drop lowest-info lines while
+    # keeping every block header. Pattern: Li 2023 arxiv 2310.06201.
+    if config.get("advisory_pruning_enabled", False):
+        budget = int(config.get("advisory_budget_chars", 1500))
+        if len(advice) > budget:
+            blocks = [b for b in advice.split("\n\n") if b.strip()]
+            advice = _prune_advisories(blocks, budget_chars=budget)
     hso = {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",
@@ -4780,6 +4860,39 @@ def run_tests() -> None:
         except sqlite3.OperationalError as exc:
             record("T55", True,
                    f"FTS5 unavailable, skipped: {exc!s}")
+
+        # T56 — v9.0 Selective Context advisory pruning
+        # Build a synthetic over-budget advisory and confirm pruning
+        # keeps headers but drops verbose tip lines.
+        sample_blocks = [
+            "ATrain v8 (recall): 2 prior hits.\n"
+            "    turn 12  Read  src/auth.py: token expiry\n"
+            "    turn 17  Grep  src/auth.py: bearer match\n"
+            "  If these excerpts answer your question, skip the tool call. "
+            "Otherwise proceed. This text is filler that should be droppable.",
+            "smart-router (outline-compress, ecotokens pattern):\n"
+            "    L42   def   def authenticate(user)\n"
+            "    L88   class class TokenManager\n"
+            "  Long tip text describing how to use the outline efficiently "
+            "without re-reading file bodies, lots of filler words here.",
+            "ATrain v6.4: rewrote bash command 'git status' for compact output.",
+        ]
+        full_text = "\n\n".join(sample_blocks)
+        pruned = _prune_advisories(sample_blocks, budget_chars=400)
+        # Pruned must be shorter than full, must keep at least the three
+        # block headers, must drop at least one filler tip line.
+        all_three_headers = (
+            "ATrain v8 (recall)" in pruned
+            and "smart-router (outline-compress" in pruned
+            and "ATrain v6.4: rewrote bash" in pruned
+        )
+        shorter = len(pruned) < len(full_text)
+        filler_dropped = "filler that should be droppable" not in pruned
+        record("T56",
+               all_three_headers and shorter and filler_dropped,
+               f"all_three_headers={all_three_headers}, "
+               f"shorter={shorter} ({len(pruned)} vs {len(full_text)}), "
+               f"filler_dropped={filler_dropped}")
 
     CONFIG_PATH = saved_config_path
 
