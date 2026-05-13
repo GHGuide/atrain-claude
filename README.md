@@ -178,6 +178,22 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ---
 
+## v8 phase 2b: Cross-session recall
+
+router-cache.sqlite holds outputs from **every** past Claude Code session you've run. Phase 2b drops the `WHERE session_id = ?` filter on the recall query so the advisory surfaces hits from prior sessions too — tagged with `sess=<id8>` so you can see which session a hit came from.
+
+Privacy caveat: the index spans every project. Off by default. Turn on with:
+
+```
+/atrain-v8p2-cross-on    # cross-session recall ON
+/atrain-v8p2-cross-off   # back to current-session-only
+rm ~/.claude/router-cache.sqlite   # nuke history entirely
+```
+
+T54 covers the cross-session path: write under session A, read under session B, assert the advisory tags session A.
+
+---
+
 ## v8 phase 2: FTS5 session output index (~+10-15pp long sessions)
 
 Every Read/Grep/LS/Glob/Bash output gets indexed into a per-session SQLite FTS5 virtual table. Before re-running a similar query, the hook does a `MATCH` against the prior outputs and surfaces top-3 BM25 hits with snippets and turn numbers as advisory. Different from the exact-input cache: this is fuzzy text search across all prior outputs.

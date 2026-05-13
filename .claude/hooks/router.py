@@ -196,6 +196,12 @@ def _default_config() -> dict:
         # and surfaces excerpts as advisory. Saves 10-15pp on long
         # sessions where Claude re-greps similar territory.
         "output_index_enabled": False,
+        # v8.0 Phase 2b — Cross-session recall. Drops the session_id
+        # filter on the FTS5 query so prior sessions' outputs surface
+        # too. Token-savior-style "did I already see this?" across all
+        # past Claude Code work. Opt-in (privacy: search hits other
+        # projects' transcripts too).
+        "cross_session_recall_enabled": False,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -1503,32 +1509,50 @@ def output_index_insert(session_id: str, tool_name: str,
 
 
 def output_index_search(session_id: str, query: str,
-                        limit: int = 3) -> list:
-    """Return list of {tool, file_path, snippet, turn, ts} for MATCH hits
-    in this session. Empty list on no FTS5 / no hits."""
+                        limit: int = 3,
+                        cross_session: bool = False) -> list:
+    """Return list of {tool, file_path, snippet, turn, ts, session_id}
+    for MATCH hits. By default scoped to session_id; when
+    cross_session=True (v8 Phase 2b) drops the filter and searches all
+    past sessions in router-cache.sqlite. Empty list on no FTS5 / no
+    hits."""
     q = _fts5_escape(query)
     if not q:
         return []
     try:
         conn = _cache_conn()
         try:
-            rows = conn.execute(
-                "SELECT tool_name, file_path, "
-                "snippet(tool_output_idx, 3, '«', '»', '…', 24) AS snip, "
-                "turn, ts "
-                "FROM tool_output_idx "
-                "WHERE session_id = ? AND content MATCH ? "
-                "ORDER BY bm25(tool_output_idx) "
-                "LIMIT ?",
-                (session_id, q, limit),
-            ).fetchall()
+            if cross_session:
+                rows = conn.execute(
+                    "SELECT tool_name, file_path, "
+                    "snippet(tool_output_idx, 3, '«', '»', '…', 24) "
+                    "AS snip, "
+                    "turn, ts, session_id "
+                    "FROM tool_output_idx "
+                    "WHERE content MATCH ? "
+                    "ORDER BY bm25(tool_output_idx) "
+                    "LIMIT ?",
+                    (q, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT tool_name, file_path, "
+                    "snippet(tool_output_idx, 3, '«', '»', '…', 24) "
+                    "AS snip, "
+                    "turn, ts, session_id "
+                    "FROM tool_output_idx "
+                    "WHERE session_id = ? AND content MATCH ? "
+                    "ORDER BY bm25(tool_output_idx) "
+                    "LIMIT ?",
+                    (session_id, q, limit),
+                ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
         return []
     return [
         {"tool": r[0], "file_path": r[1], "snippet": r[2],
-         "turn": r[3], "ts": r[4]}
+         "turn": r[3], "ts": r[4], "session_id": r[5]}
         for r in rows
     ]
 
@@ -2972,18 +2996,28 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
             recall_query = str(tool_input.get("pattern", "")
                                or tool_input.get("path", ""))
         if len(recall_query) >= 3:
-            hits = output_index_search(session_id, recall_query, limit=3)
+            cross = config.get("cross_session_recall_enabled", False)
+            hits = output_index_search(
+                session_id, recall_query, limit=3, cross_session=cross
+            )
             if hits:
+                scope_label = (
+                    "all past sessions" if cross else "this session"
+                )
                 lines = [
                     "ATrain v8 (recall, context-mode pattern):",
-                    f"  {len(hits)} prior {tool_name}-class output(s) in "
-                    f"this session match {recall_query!r}.",
+                    f"  {len(hits)} prior {tool_name}-class output(s) "
+                    f"in {scope_label} match {recall_query!r}.",
                 ]
                 for h in hits:
                     snip = (h["snippet"] or "").replace("\n", " ")[:160]
+                    same_sess = h["session_id"] == session_id
+                    sess_tag = (
+                        "" if same_sess else f"  sess={h['session_id'][:8]}"
+                    )
                     lines.append(
                         f"    turn {h['turn']:<3d}  {h['tool']:<6s}  "
-                        f"{(h['file_path'] or '-')[:40]}  {snip}"
+                        f"{(h['file_path'] or '-')[:40]}{sess_tag}  {snip}"
                     )
                 lines.append(
                     "  If these excerpts answer your question, skip the "
@@ -4442,6 +4476,46 @@ def run_tests() -> None:
         except sqlite3.OperationalError as exc:
             # FTS5 unavailable on this sqlite build — skip cleanly
             record("T53", True,
+                   f"FTS5 unavailable, skipped: {exc!s}")
+
+        # T54 — v8.0 Phase 2b cross-session recall
+        # Insert under session A, then call PreToolUse under session B
+        # with cross_session_recall_enabled. Expect advisory naming
+        # session A via sess= tag.
+        v8p2b_cfg = _default_config()
+        v8p2b_cfg["output_index_enabled"] = True
+        v8p2b_cfg["cross_session_recall_enabled"] = True
+        atomic_write_json(CONFIG_PATH, v8p2b_cfg)
+        save_session_log("t54_sessA", [{"phase": "pre", "turn": 1}])
+        save_session_log("t54_sessB", [{"phase": "pre", "turn": 1}])
+        try:
+            capture(handle_post_tool_use, {
+                "hook_event": "PostToolUse",
+                "session_id": "t54_sessA",
+                "tool_name": "Grep",
+                "tool_input": {"pattern": "rare_cross_session_marker_v8b"},
+                "tool_output": (
+                    "src/foo.py: rare_cross_session_marker_v8b detected\n"
+                ),
+            })
+            out_b = capture(handle_pre_tool_use, {
+                "hook_event": "PreToolUse",
+                "session_id": "t54_sessB",
+                "tool_name": "Grep",
+                "tool_input": {"pattern": "rare_cross_session_marker_v8b"},
+            })
+            ctx54 = (out_b.get("hookSpecificOutput") or {}).get(
+                "additionalContext", "")
+            cross_fired = "all past sessions" in ctx54
+            cross_tag_present = "sess=t54_sess" in ctx54
+            marker_present = "rare_cross_session_marker_v8b" in ctx54
+            record("T54",
+                   cross_fired and cross_tag_present and marker_present,
+                   f"cross_fired={cross_fired}, "
+                   f"cross_tag_present={cross_tag_present}, "
+                   f"marker_present={marker_present}")
+        except sqlite3.OperationalError as exc:
+            record("T54", True,
                    f"FTS5 unavailable, skipped: {exc!s}")
 
     CONFIG_PATH = saved_config_path
