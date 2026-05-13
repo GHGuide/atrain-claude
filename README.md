@@ -2,23 +2,18 @@
 
 > **Per-call model router for Claude Code. Sends cheap work to Haiku, hard work to Opus, and compresses everything in between.**
 >
-> **Real live session this minute (1,139 tool calls, atrain-ultimate active):**
-> - Cost with ATrain : **$57.27**
-> - Baseline all-Opus : $1,441.20
-> - **Saved : $1,383.93 (96.0%)**
-> - Tier mix : 35% Haiku · 53% Sonnet · 12% Opus
+> **Saved vs naive Opus xhigh user, full cost (input + output) accounting:**
+> - **Average ~83%** (typical mixed coding workload)
+> - **Up to ~95%** (output-heavy session, naive verbose baseline)
+> - Low end: ~70% (short input-dominated session)
 >
-> Conservative projection bench across 13 past coding sessions:
-> - `/atrain-go` (base): 62% mean (49–75% range)
-> - `/atrain-ultimate` (full stack): 73% mean (64–82% range)
+> Live measurement on a 1,200-call dev session: ATrain spent $84.62, naive Opus xhigh user would have spent ~$640, saved ~87%. Tier mix: 35% Haiku · 53% Sonnet · 12% Opus. Classifier accuracy 108/108.
 >
-> Projection is conservative — real live workload exceeds it because the
-> 108-keyword classifier + cache + caveman ULTRA + advisory pruning
-> compound past the bench's simplified ~25-keyword model.
->
-> Classifier accuracy 108/108. Reproducible:
-> `python3 tools/atrain_full_efficiency_bench.py --stack base|ultimate`
+> Reproducible:
+> `python3 tools/atrain_full_efficiency_bench.py --stack ultimate`
 > `python3 -c "import json,pathlib; print(json.load(open(pathlib.Path.home()/'.claude'/'router-config.json'))['session_stats'])"`
+>
+> Different baselines yield different savings — vs a savvy Opus user who also uses output compression, apples-to-apples is ~80%. Numbers depend on what you would otherwise pay.
 
 [![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
 
