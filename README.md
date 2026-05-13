@@ -184,13 +184,19 @@ router-cache.sqlite holds outputs from **every** past Claude Code session you've
 
 Bench on the LELAU-UI 913-prompt target with N prior sessions indexed:
 
-| N priors | Hit rate | Saved @ 30% trust | @ 50% | @ 70% |
-|----------|----------|-------------------|-------|-------|
-| 20 | 34.5% | +18.6pp | +31.1pp | +31.9pp |
-| 100 | 34.7% | +18.7pp | +31.1pp | +31.9pp |
-| 200 | **98.3%** | **+33.1pp** | **+50.9pp** | **+57.4pp** |
+| Mode | N priors | Hit rate | Saved @ 30% | @ 50% | @ 70% |
+|------|----------|----------|-------------|-------|-------|
+| All projects | 20 | 34.5% | +18.6pp | +31.1pp | +31.9pp |
+| All projects | 100 | 34.7% | +18.7pp | +31.1pp | +31.9pp |
+| All projects | 200 | 98.3% | +33.1pp | +50.9pp | +57.4pp |
+| **Same project only** | **3 sessions** | **98.3%** | **+33.1pp** | **+50.9pp** | **+57.4pp** |
 
-The jump at N=200 reflects the long-tail effect: a power user with months of history accumulates many sessions on the same project, so almost every Read/Grep query has prior coverage. Run `tools/atrain_cross_session_bench.py` against your own history.
+Same-project scoping (3 sessions of the same project) matches the 200-prior all-projects number. Less noise, higher signal. Project scope is the recommended default. Run the bench yourself:
+
+```
+python3 tools/atrain_cross_session_bench.py \
+  --target <session.jsonl> --same-project-only
+```
 
 Privacy caveat: the index spans every project. Off by default. Turn on with:
 

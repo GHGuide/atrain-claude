@@ -79,6 +79,9 @@ def main():
     ap.add_argument("--target", type=str, default=None,
                     help="Pin target transcript path. Default = most "
                          "recent in projects-dir.")
+    ap.add_argument("--same-project-only", action="store_true",
+                    help="Restrict priors to sessions in the SAME "
+                         "project directory as the target (parent dir).")
     args = ap.parse_args()
 
     root = pathlib.Path(args.projects_dir)
@@ -90,10 +93,17 @@ def main():
 
     if args.target:
         target = pathlib.Path(args.target)
-        priors = [s for s in sessions if s.resolve() != target.resolve()][: args.n - 1]
+        priors = [s for s in sessions if s.resolve() != target.resolve()]
     else:
         target = sessions[0]
-        priors = sessions[1: args.n]
+        priors = sessions[1:]
+
+    if args.same_project_only:
+        target_proj = target.parent.resolve()
+        priors = [s for s in priors if s.parent.resolve() == target_proj]
+        print(f"Project scope    : {target_proj.name}")
+
+    priors = priors[: args.n - 1]
     print(f"Target session : {target.name}")
     print(f"Prior sessions : {len(priors)}")
 

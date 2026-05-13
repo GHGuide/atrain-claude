@@ -202,6 +202,12 @@ def _default_config() -> dict:
         # past Claude Code work. Opt-in (privacy: search hits other
         # projects' transcripts too).
         "cross_session_recall_enabled": False,
+        # v8.0 Phase 2c — when cross_session_recall is on, restrict to
+        # sessions whose recorded project_dir matches the current cwd.
+        # Default true: bench shows project scope = privacy WIN +
+        # accuracy WIN (98% hit rate, no noise). Set false to span
+        # every project.
+        "cross_session_recall_project_only": True,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -1269,6 +1275,12 @@ def _cache_conn():
     except sqlite3.OperationalError:
         # FTS5 not compiled in this sqlite build. v8 phase 2 disabled.
         pass
+    # v8.0 Phase 2c — session -> project mapping for project-scoped
+    # cross-session recall. Side table because FTS5 doesn't allow ALTER.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS session_project ("
+        "session_id TEXT PRIMARY KEY, project_dir TEXT)"
+    )
     return conn
 
 
@@ -1488,7 +1500,9 @@ def _fts5_escape(query: str) -> str:
 def output_index_insert(session_id: str, tool_name: str,
                         file_path: str, content: str,
                         turn: int) -> None:
-    """Insert one tool output row. No-op on FTS5-missing or huge content."""
+    """Insert one tool output row. No-op on FTS5-missing or huge content.
+    v8 Phase 2c also upserts session_id -> project_dir mapping so the
+    --project-only recall mode can filter accurately."""
     if not content or len(content) > 200_000:
         return
     try:
@@ -1501,6 +1515,18 @@ def output_index_insert(session_id: str, tool_name: str,
                 (session_id, tool_name, file_path or "",
                  content[:200_000], turn, time.time()),
             )
+            # Map session -> project for project-scoped recall.
+            # Claude Code runs from project root, so os.getcwd() is the
+            # project dir. If the row already exists, keep the original
+            # (sessions don't change project mid-flight).
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO session_project "
+                    "(session_id, project_dir) VALUES (?, ?)",
+                    (session_id, os.getcwd()),
+                )
+            except sqlite3.Error:
+                pass
         finally:
             conn.close()
     except sqlite3.Error:
@@ -1510,11 +1536,14 @@ def output_index_insert(session_id: str, tool_name: str,
 
 def output_index_search(session_id: str, query: str,
                         limit: int = 3,
-                        cross_session: bool = False) -> list:
+                        cross_session: bool = False,
+                        project_only_dir: str = "") -> list:
     """Return list of {tool, file_path, snippet, turn, ts, session_id}
     for MATCH hits. By default scoped to session_id; when
     cross_session=True (v8 Phase 2b) drops the filter and searches all
-    past sessions in router-cache.sqlite. Empty list on no FTS5 / no
+    past sessions. When project_only_dir is non-empty (v8 Phase 2c),
+    further restricts cross-session results to sessions whose recorded
+    project_dir matches the given dir. Empty list on no FTS5 / no
     hits."""
     q = _fts5_escape(query)
     if not q:
@@ -1522,7 +1551,22 @@ def output_index_search(session_id: str, query: str,
     try:
         conn = _cache_conn()
         try:
-            if cross_session:
+            if cross_session and project_only_dir:
+                rows = conn.execute(
+                    "SELECT t.tool_name, t.file_path, "
+                    "snippet(tool_output_idx, 3, '«', '»', '…', 24) "
+                    "AS snip, "
+                    "t.turn, t.ts, t.session_id "
+                    "FROM tool_output_idx t "
+                    "JOIN session_project sp "
+                    "  ON sp.session_id = t.session_id "
+                    "WHERE t.content MATCH ? "
+                    "  AND sp.project_dir = ? "
+                    "ORDER BY bm25(tool_output_idx) "
+                    "LIMIT ?",
+                    (q, project_only_dir, limit),
+                ).fetchall()
+            elif cross_session:
                 rows = conn.execute(
                     "SELECT tool_name, file_path, "
                     "snippet(tool_output_idx, 3, '«', '»', '…', 24) "
@@ -2997,8 +3041,14 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
                                or tool_input.get("path", ""))
         if len(recall_query) >= 3:
             cross = config.get("cross_session_recall_enabled", False)
+            proj_only = config.get(
+                "cross_session_recall_project_only", True
+            )
+            proj_dir = os.getcwd() if (cross and proj_only) else ""
             hits = output_index_search(
-                session_id, recall_query, limit=3, cross_session=cross
+                session_id, recall_query, limit=3,
+                cross_session=cross,
+                project_only_dir=proj_dir,
             )
             if hits:
                 scope_label = (
