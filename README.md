@@ -62,17 +62,21 @@ git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude
 bash install.sh
 ```
 
-Then in Claude Code:
+Then in Claude Code, pick one of three activation tiers:
 
 ```
-/atrain-go        # base stack (router + caveman + decompose + bash-rewrite)
-/atrain-v8-go     # base + full v8 stack (progressive Read + FTS5 recall +
-                  # same-project cross-session + curated memory + backfill)
+/atrain-go         # base only       — 58-71% saved, normal prose
+/atrain-v8-go      # base + v8 stack — adds +8-20pp on coding sessions with history
+/atrain-ultimate   # base + v8 + caveman ULTRA — ~80-85% ceiling, Tarzan output
 ```
 
-`/atrain-go` is enough to ship. `/atrain-v8-go` adds the v8 phases for power users with prior session history on the project.
+| Tier | Output style | Saves | Use when |
+|------|--------------|-------|----------|
+| `/atrain-go` | Normal Claude prose | 58-71% | Most sessions. Readable. |
+| `/atrain-v8-go` | Normal prose + advisory snippets in context | +8-20pp on top | Power user with prior sessions on the project. |
+| `/atrain-ultimate` | Caveman ultra (Tarzan fragments) | **~80-85% ceiling** | When you only care about cost. Use `/atrain-normal` to switch to prose mid-session for explanations. |
 
-Stop with `/atrain-kill` (base) or `/atrain-v8-stop` (v8 only — data retained).
+Stop: `/atrain-kill` (base) · `/atrain-v8-stop` (v8 only) · `/atrain-normal` (un-caveman).
 
 ---
 
