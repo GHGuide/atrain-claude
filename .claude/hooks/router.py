@@ -362,6 +362,34 @@ def rewrite_bash_command(cmd: str) -> tuple:
 
         # npm install — silent unless --verbose
         (r"^npm\s+install\s*$", "npm install --silent 2>&1 | tail -20"),
+
+        # v9 — additional test-runner coverage (Copilot/Cody pattern:
+        # collapse passing output, keep failures).
+        (r"^jest\s*$", "jest --silent --reporters=default 2>&1 | tail -80"),
+        (r"^npx\s+jest\s*$",
+         "npx jest --silent --reporters=default 2>&1 | tail -80"),
+        (r"^vitest\s*$", "vitest run --reporter=basic 2>&1 | tail -80"),
+        (r"^npx\s+vitest\s*$",
+         "npx vitest run --reporter=basic 2>&1 | tail -80"),
+        (r"^go\s+test\s*$", "go test ./... 2>&1 | tail -80"),
+        (r"^go\s+test\s+\.\.\.\s*$", "go test ./... 2>&1 | tail -80"),
+        (r"^mocha\s*$", "mocha --reporter min 2>&1 | tail -80"),
+        (r"^rspec\s*$", "rspec --format progress 2>&1 | tail -80"),
+        (r"^phpunit\s*$", "phpunit --no-progress 2>&1 | tail -80"),
+        (r"^mvn\s+test\s*$",
+         "mvn test --batch-mode --quiet 2>&1 | tail -80"),
+        (r"^\./gradlew\s+test\s*$",
+         "./gradlew test --quiet --console=plain 2>&1 | tail -80"),
+        (r"^gradle\s+test\s*$",
+         "gradle test --quiet --console=plain 2>&1 | tail -80"),
+
+        # docker logs — recent only
+        (r"^docker\s+logs\s+(\S+)\s*$",
+         lambda m: f"docker logs --tail 100 {m.group(1)}"),
+
+        # kubectl logs — recent
+        (r"^kubectl\s+logs\s+(\S+)\s*$",
+         lambda m: f"kubectl logs --tail=100 {m.group(1)}"),
     ]
 
     for pattern, replacement in rewrites:
