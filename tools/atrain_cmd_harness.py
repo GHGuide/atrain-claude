@@ -13,7 +13,7 @@ CONFIG = pathlib.Path.home() / ".claude" / "router-config.json"
 backup = json.loads(CONFIG.read_text())
 
 results = []
-for md in sorted(CMDS_DIR.glob("atrain-*.md")):
+for md in sorted(CMDS_DIR.glob("atrain*.md")):
     name = md.stem
     src = md.read_text()
     # Extract first python heredoc body

@@ -73,21 +73,25 @@ git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude
 bash install.sh
 ```
 
-Then in Claude Code, pick one of three activation tiers:
+Then in Claude Code:
 
 ```
-/atrain-go         # base only       — 58-71% saved, normal prose
-/atrain-v8-go      # base + v8 stack — adds +8-20pp on coding sessions with history
-/atrain-ultimate   # base + v8 + caveman ULTRA — ~80-85% ceiling, Tarzan output
+/atrain ultimate   # max savings (default if no arg) — caveman ULTRA, full v8 stack
+/atrain v8         # power-user stack, readable prose
+/atrain base       # router only, no v8 features
+/atrain off        # disarm everything
 ```
 
-| Tier | Output style | Saves (measured) | Use when |
-|------|--------------|------------------|----------|
-| `/atrain-go` | Normal Claude prose | **62% mean** (49-75%) | Most sessions. Readable. |
-| `/atrain-v8-go` | Normal prose + advisory snippets | +5-11pp on top of base | Power user with prior sessions on the project. |
-| `/atrain-ultimate` | Caveman ultra (Tarzan fragments) | **73% mean** (64-82%) | When you only care about cost. Use `/atrain-normal` to switch to prose mid-session for explanations. |
+## All six commands
 
-Stop: `/atrain-kill` (base) · `/atrain-v8-stop` (v8 only) · `/atrain-normal` (un-caveman).
+| Command | Purpose |
+|---------|---------|
+| `/atrain [ultimate\|v8\|base\|off]` | Activate or stop the stack. Defaults to `ultimate`. |
+| `/atrain-status` | Live session card — cost, accuracy, tier mix, v9 flag state. |
+| `/atrain-style <terse\|normal>` | Toggle caveman ULTRA vs full prose output. |
+| `/atrain-memory <add\|del\|list\|search>` | Curated cross-session memory CRUD. |
+| `/atrain-autopsy [<jsonl>]` | Project savings on any past transcript. |
+| `/atrain-graphify` | Optional graphify knowledge-graph integration. |
 
 ---
 
@@ -199,7 +203,7 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 
 ## v8 power-user stack — one command
 
-`/atrain-v8-go` flips four features at once + runs a one-time session→project backfill. `/atrain-v8-stop` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
+`/atrain v8` flips four features at once + runs a one-time session→project backfill. `/atrain off` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
 
 | Feature | What it does | Measured |
 |---------|--------------|----------|
@@ -211,9 +215,9 @@ python3 tools/atrain_v8_projection.py <past-session.jsonl>
 Curated memory:
 
 ```
-/atrain-remember decision use the retry-with-backoff helper, not raw fetch
-/atrain-memory-list                       # show this project's memories
-/atrain-forget <id>                       # delete one
+/atrain-memory add decision use the retry-with-backoff helper, not raw fetch
+/atrain-memory list                       # show this project's memories
+/atrain-memory del <id>                       # delete one
 ```
 
 Categories: `decision | bugfix | convention | lesson | note`. Project-scoped via `os.getcwd()`. Cross-project leakage impossible.
@@ -221,7 +225,7 @@ Categories: `decision | bugfix | convention | lesson | note`. Project-scoped via
 Inspect prior tool outputs from any of your past sessions on this project:
 
 ```
-/atrain-recall <query>
+/atrain-memory search <query>
 ```
 
 Project the gain on your own past session before turning anything on:
