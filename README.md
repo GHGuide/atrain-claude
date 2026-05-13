@@ -65,10 +65,14 @@ bash install.sh
 Then in Claude Code:
 
 ```
-/atrain-go
+/atrain-go        # base stack (router + caveman + decompose + bash-rewrite)
+/atrain-v8-go     # base + full v8 stack (progressive Read + FTS5 recall +
+                  # same-project cross-session + curated memory + backfill)
 ```
 
-Done. Armed for the conversation.
+`/atrain-go` is enough to ship. `/atrain-v8-go` adds the v8 phases for power users with prior session history on the project.
+
+Stop with `/atrain-kill` (base) or `/atrain-v8-stop` (v8 only — data retained).
 
 ---
 
