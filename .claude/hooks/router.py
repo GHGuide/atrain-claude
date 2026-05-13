@@ -1685,8 +1685,9 @@ def output_index_search(session_id: str, query: str,
                     "WHERE t.content MATCH ? "
                     "  AND sp.project_dir = ? "
                     "ORDER BY bm25(tool_output_idx) "
+                    "  - 0.0001 * (? - t.ts) "    # v9: temporal decay
                     "LIMIT ?",
-                    (q, project_only_dir, limit),
+                    (q, project_only_dir, time.time(), limit),
                 ).fetchall()
             elif cross_session:
                 rows = conn.execute(
@@ -1697,8 +1698,9 @@ def output_index_search(session_id: str, query: str,
                     "FROM tool_output_idx "
                     "WHERE content MATCH ? "
                     "ORDER BY bm25(tool_output_idx) "
+                    "  - 0.0001 * (? - ts) "       # v9: temporal decay
                     "LIMIT ?",
-                    (q, limit),
+                    (q, time.time(), limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -1709,8 +1711,9 @@ def output_index_search(session_id: str, query: str,
                     "FROM tool_output_idx "
                     "WHERE session_id = ? AND content MATCH ? "
                     "ORDER BY bm25(tool_output_idx) "
+                    "  - 0.0001 * (? - ts) "       # v9: temporal decay
                     "LIMIT ?",
-                    (session_id, q, limit),
+                    (session_id, q, time.time(), limit),
                 ).fetchall()
         finally:
             conn.close()
