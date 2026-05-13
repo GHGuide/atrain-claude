@@ -1903,8 +1903,18 @@ def load_session_log(session_id: str) -> list:
         return []
 
 
+_SESSION_LOG_MAX_ENTRIES = 500
+
+
 def save_session_log(session_id: str, log: list) -> None:
+    """Persist session log. v9 efficiency: caps at the most recent
+    _SESSION_LOG_MAX_ENTRIES so PreToolUse JSON IO stays O(1) on long
+    sessions (was O(N) per call before the cap — quadratic over the
+    session). Loop-detect / eviction-notice / decompose hint all only
+    look at recent entries, so older entries are safe to drop."""
     p = session_temp_path(session_id)
+    if isinstance(log, list) and len(log) > _SESSION_LOG_MAX_ENTRIES:
+        log = log[-_SESSION_LOG_MAX_ENTRIES:]
     tmp = p.with_suffix(p.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(log, f)
