@@ -76,9 +76,15 @@ PHASE2_SKIP_PROB = 0.30   # 30% of recall-eligible calls eliminated
 
 
 def main():
+    global PHASE2_SKIP_PROB
     ap = argparse.ArgumentParser()
     ap.add_argument("transcript")
+    ap.add_argument("--skip-prob", type=float, default=0.30,
+                    help="Probability Claude trusts recall advisory and "
+                         "skips the call. 0.30 conservative (default), "
+                         "0.50 moderate, 0.70 aggressive ceiling.")
     args = ap.parse_args()
+    PHASE2_SKIP_PROB = args.skip_prob
 
     events = parse(args.transcript)
     if not events:
@@ -137,7 +143,10 @@ def main():
                 path = inp.get("file_path") or inp.get("path") or ""
                 query = os.path.splitext(os.path.basename(path))[0]
             if len(query) >= 3:
-                prior = "\n".join(all_output_text[-200:])
+                # Real router does FTS5 over WHOLE session DB. Use the
+                # full output history, capped only for memory sanity.
+                prior_window = all_output_text if len(all_output_text) < 5000 else all_output_text[-5000:]
+                prior = "\n".join(prior_window)
                 if query in prior:
                     # 30% chance Claude trusts recall and skips.
                     # Deterministic hash via md5 so re-runs are stable;
@@ -177,8 +186,8 @@ def main():
     print("|  Grep calls              : %-6d                          |" % n_grep)
     print("|  Progressive intercepts  : %-6d (first big-file Reads)   |"
           % n_progressive_intercepts)
-    print("|  Recall skips            : %-6d (text match + 30%% prob)  |"
-          % n_recall_skips)
+    print("|  Recall skips            : %-6d (text match + %2.0f%% prob) |"
+          % (n_recall_skips, PHASE2_SKIP_PROB * 100))
     print("+-----------------------------------------------------------+")
     print("|  Base ATrain (no v8)                                       |")
     print("|    Output tokens (recon layer) : %-9d                  |" % base_tokens)

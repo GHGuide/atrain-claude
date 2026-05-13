@@ -152,15 +152,23 @@ tools/
 
 ## v8 benchmark (measured, not modeled)
 
-Deterministic numbers from `tools/atrain_v8_projection.py` (md5 seed, stable across re-runs) on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads):
+Deterministic numbers from `tools/atrain_v8_projection.py` (md5 seed, stable across re-runs) on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads). The Phase 2 gain depends on how often Claude trusts the recall advisory and actually skips the call:
 
-| Layer | Saved (recon layer) |
-|-------|---------------------|
-| Base ATrain only | 0% (ref) |
-| + v8.1 progressive Read | 0.9% |
-| + v8.1 + v8.2 recall | **18.4%** |
+| Trust prob | v8.1 alone | v8.1 + v8.2 | Marginal v8.2 |
+|------------|------------|-------------|---------------|
+| 30% (conservative — default) | 0.9% | **19.1%** | +18.2pp |
+| 50% (moderate) | 0.9% | **29.3%** | +28.4pp |
+| 70% (aggressive ceiling) | 0.9% | **32.7%** | +31.8pp |
 
-Phase 2 FTS5 recall does all the work (+17.5pp marginal). Phase 1 progressive Read is structurally capped at ~1pp on this workload: most Reads target small files, already-seen files (correct cache behavior), or non-outline file types. Lowering thresholds (120→80 lines, 4KB→2KB, +13 more exts) lifted intercepts only 6→10. Phase 1 is kept because it costs nothing, but the headline gain is Phase 2 alone.
+Realistic v8.2 contribution on a coding-heavy session: **+18–28pp** on the recon layer, or **+9–14pp** on total session cost (recon ≈ 50% of cost).
+
+Phase 1 is structurally capped at ~1pp on this workload — most Reads target small files, already-seen files (correct cache behavior), or non-outline file types. Lowering thresholds (120→80 lines, 4KB→2KB, +13 more exts) lifted intercepts only 6→10. Phase 1 is kept because it costs nothing, but the headline gain is Phase 2 alone.
+
+Project against your own past session:
+
+```
+python3 tools/atrain_v8_projection.py --skip-prob 0.50 <past.jsonl>
+```
 
 Project on your own past session before installing:
 
