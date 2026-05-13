@@ -102,9 +102,9 @@ echo "────────────────────────�
 echo
 echo "Restart Claude Code. Then in any project, type:"
 echo
-echo "    /atrain ultimate   — max savings, caveman ULTRA output (default)"
-echo "    /atrain regular    — same stack, caveman OFF, readable prose"
-echo "    /atrain off        — disarm everything"
+echo "    /atrain-ultimate   — max savings, caveman ULTRA + v8 stack"
+echo "    /atrain-regular    — same stack, caveman OFF, readable prose"
+echo "    /atrain-kill       — disarm everything"
 echo "    /atrain-status     — live stats card"
 echo "    /atrain-autopsy    — project savings on any past transcript"
 echo

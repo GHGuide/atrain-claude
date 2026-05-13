@@ -64,20 +64,22 @@ bash install.sh
 Restart Claude Code. Then:
 
 ```
-/atrain
+/atrain-ultimate
 ```
 
-That's it. Stack armed for the whole conversation.
+That's it. Stack armed for the whole conversation. Switch to readable prose with `/atrain-regular` or disarm with `/atrain-kill`.
 
 ---
 
-## Three commands. That's the whole surface.
+## Five commands. That's the whole surface.
 
 | Command | What it does |
 |---------|--------------|
-| `/atrain [ultimate \| regular \| off]` | Activate (default: `ultimate`, max savings, terse output) or disarm. `regular` keeps prose readable. |
-| `/atrain-status` | Live card — cost, savings %, accuracy, tier mix. |
-| `/atrain-autopsy [<jsonl>]` | Project savings on any past transcript. |
+| `/atrain-ultimate` | Max savings. Caveman ULTRA output + full v8 stack. |
+| `/atrain-regular`  | Same v8 stack, caveman OFF, readable prose. |
+| `/atrain-kill`     | Disarm everything. Data retained in cache DB. |
+| `/atrain-status`   | Live card — cost, savings %, accuracy, tier mix. |
+| `/atrain-autopsy`  | Project savings on any past transcript. |
 
 ---
 
@@ -118,7 +120,7 @@ python3 -c "import json, pathlib; print(json.load(open(pathlib.Path.home()/'.cla
 
 ## Drawbacks
 
-- Default mode (`ultimate`) gives terse output. Switch with `/atrain regular` for full prose.
+- `/atrain-ultimate` gives terse output. Use `/atrain-regular` for full prose.
 - First session on a new project: no prior cache, savings start lower and ramp up after 2-3 sessions.
 - Doesn't help if you're already running everything on Haiku. Helps most against Opus-heavy or default Sonnet workloads.
 

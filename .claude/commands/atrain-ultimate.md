@@ -1,43 +1,21 @@
 ---
-description: ATrain master command. /atrain ultimate (default, full v8 stack + caveman ULTRA for max savings) | /atrain regular (same v8 stack but caveman OFF for readable prose) | /atrain off (disarm).
-argument-hint: [ultimate|regular|off]
+description: ATrain ULTIMATE — max savings. Caveman ULTRA output + full v8 stack. Switch to readable with /atrain-regular. Disarm with /atrain-kill.
 ---
 
-User invoked `/atrain $ARGUMENTS`.
+User invoked `/atrain-ultimate`.
 
 **EXECUTE the bash block below NOW via the Bash tool. Do not reply "Noted".**
 
 ```bash
 python3 - <<'EOF'
-import json, os, pathlib, sqlite3, sys, time
+import json, os, pathlib, sqlite3, sys
 
-arg = """$ARGUMENTS""".strip().lower() or "ultimate"
 home = pathlib.Path.home() / ".claude" / "router-config.json"
 proj = pathlib.Path(".claude/router-config.json")
 p = home if home.exists() else proj
 cfg = json.loads(p.read_text()) if p.exists() else {}
 
-def save(c):
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(c, indent=2))
-    os.replace(tmp, p)
-
-if arg in ("off", "kill", "stop"):
-    cfg["progressive_read_enabled"] = False
-    cfg["output_index_enabled"] = False
-    cfg["cross_session_recall_enabled"] = False
-    cfg["advisory_pruning_enabled"] = False
-    cfg["caveman_intensity"] = None
-    cfg["decompose_enabled"] = False
-    save(cfg)
-    print("+------------------------------+")
-    print("|  ATrain OFF                  |")
-    print("|  All features disarmed.      |")
-    print("|  Data retained in cache DB.  |")
-    print("+------------------------------+")
-    sys.exit(0)
-
-# Base profile for both ultimate + regular
+# Base profile
 cfg["mode"] = "balanced"
 cfg["accuracy_target"] = 99.0
 cfg["decompose_enabled"] = True
@@ -49,7 +27,7 @@ cfg["cross_session_recall_project_only"] = True
 cfg["advisory_pruning_enabled"] = True
 cfg["advisory_budget_chars"] = 1500
 
-# Reset session_stats so the dashboard reflects this run
+# Reset session_stats
 empty_tier = {k: 0 for k in [
     "haiku_none","sonnet_low","sonnet_medium","sonnet_high","sonnet_max",
     "opus_low","opus_medium","opus_high","opus_xhigh","opus_max",
@@ -60,7 +38,7 @@ cfg.setdefault("session_stats", {
     "baseline_opus_xhigh_cost_usd": 0.0, "estimated_savings_usd": 0.0,
 })
 
-# Backfill session->project + count priors (for adaptive caveman)
+# Backfill session->project + count priors
 db_path = pathlib.Path.home() / ".claude" / "router-cache.sqlite"
 proj_root = pathlib.Path.home() / ".claude" / "projects"
 prior_count = 0
@@ -70,16 +48,12 @@ if db_path.exists() and proj_root.exists():
             with open(jp, "r", encoding="utf-8", errors="ignore") as f:
                 for ln in f:
                     ln = ln.strip()
-                    if not ln:
-                        continue
-                    try:
-                        obj = json.loads(ln)
-                    except ValueError:
-                        return str(jp.parent.resolve())
+                    if not ln: continue
+                    try: obj = json.loads(ln)
+                    except ValueError: return str(jp.parent.resolve())
                     c = obj.get("cwd")
                     return c if isinstance(c, str) and c else str(jp.parent.resolve())
-        except OSError:
-            return str(jp.parent.resolve())
+        except OSError: return str(jp.parent.resolve())
         return str(jp.parent.resolve())
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     try:
@@ -91,30 +65,24 @@ if db_path.exists() and proj_root.exists():
     finally:
         conn.close()
 
-# The only difference between ultimate and regular:
-if arg in ("regular", "normal", "readable", "prose"):
-    cfg["caveman_intensity"] = None
-    label = "REGULAR"
-    style_note = "Full prose. Readable Claude voice."
-else:  # ultimate (default)
-    cfg["caveman_intensity"] = "ultra" if prior_count >= 3 else "full"
-    label = "ULTIMATE"
-    style_note = f"Caveman {cfg['caveman_intensity'].upper()} — max compression."
+# Caveman: adaptive — full (cold) / ultra (warm)
+cfg["caveman_intensity"] = "ultra" if prior_count >= 3 else "full"
 
-save(cfg)
+tmp = p.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(cfg, indent=2))
+os.replace(tmp, p)
 
 print("+----------------------------------------------------------+")
-print(f"|  ATrain {label} — ARMED                              ".ljust(58) + "|")
+print("|  ATrain ULTIMATE — ARMED                                 |")
 print("+----------------------------------------------------------+")
-print(f"|  Style: {style_note[:48]:<48s} |")
+print(f"|  Caveman: {cfg['caveman_intensity'].upper():<6s} (max compression)                    |")
 print("|  Routing per-call, decompose, bash-rewrite               |")
 print("|  v8: progressive Read, FTS5 recall, same-project cross   |")
 print("|       session, advisory pruning                          |")
 print(f"|  Priors this project : {prior_count:<33d} |")
 print("+----------------------------------------------------------+")
-print("|  Switch readable: /atrain regular                        |")
-print("|  Switch max save: /atrain ultimate                       |")
-print("|  Stop everything: /atrain off                            |")
+print("|  Readable: /atrain-regular                               |")
+print("|  Stop    : /atrain-kill                                  |")
 print("+----------------------------------------------------------+")
 EOF
 ```
