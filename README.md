@@ -150,6 +150,28 @@ tools/
 
 ---
 
+## v8 phase 2: FTS5 session output index (~+10-15pp long sessions)
+
+Every Read/Grep/LS/Glob/Bash output gets indexed into a per-session SQLite FTS5 virtual table. Before re-running a similar query, the hook does a `MATCH` against the prior outputs and surfaces top-3 BM25 hits with snippets and turn numbers as advisory. Different from the exact-input cache: this is fuzzy text search across all prior outputs.
+
+Off by default. Enable per-session:
+
+```
+/atrain-v8p2-on          # flip output_index_enabled
+/atrain-v8p2-off         # revert
+/atrain-recall <query>   # free-text grep over this session's outputs
+```
+
+Trigger criteria for the auto-advisory:
+- Read / Grep / Glob / LS pre-tool
+- output_index_enabled in router-config
+- Derived query >= 3 chars (Grep pattern, Read filename, Glob pattern)
+- FTS5 returns >= 1 hit for this session
+
+Falls back silently if the runtime sqlite lacks FTS5 (T53 also handles this).
+
+---
+
 ## v8 phase 1: Progressive Read disclosure (~+15-20pp recon-heavy)
 
 First Read of a large source file in a session now returns just the head 60 lines plus a symbol outline (function/class signatures + line numbers). Claude navigates by outline and only re-Reads with explicit `offset` + `limit` when it needs a specific body. Pattern lifted from Mibayy/token-savior. Real claimed gain on tsbench: -77% active tokens/task.

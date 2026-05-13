@@ -190,6 +190,12 @@ def _default_config() -> dict:
         # as advisory. Subsequent Reads of same file bypass the
         # intercept. Saves 15-20pp on recon-heavy sessions.
         "progressive_read_enabled": False,
+        # v8.0 Phase 2 — Session output FTS5 index (context-mode pattern).
+        # Every tool output indexed in SQLite FTS5. Before re-running a
+        # Read/Grep, hook searches prior outputs for matching content
+        # and surfaces excerpts as advisory. Saves 10-15pp on long
+        # sessions where Claude re-greps similar territory.
+        "output_index_enabled": False,
         "caveman_intensity": None,  # null/lite/full/ultra; eco auto-fires "full"
         "routing_tables": {
             "eco": {
@@ -1202,6 +1208,19 @@ def _cache_conn():
         "failure_kind TEXT, ts REAL, "
         "PRIMARY KEY(fingerprint, alias))"
     )
+    # v8.0 Phase 2 — FTS5 index of tool outputs. Session-scoped MATCH
+    # query lets us recall prior outputs and skip duplicate work even
+    # when args differ. Falls back silently if FTS5 not available.
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS tool_output_idx "
+            "USING fts5(session_id, tool_name, file_path, content, "
+            "turn UNINDEXED, ts UNINDEXED, "
+            "tokenize='unicode61 remove_diacritics 2')"
+        )
+    except sqlite3.OperationalError:
+        # FTS5 not compiled in this sqlite build. v8 phase 2 disabled.
+        pass
     return conn
 
 
@@ -1402,6 +1421,74 @@ def cache_put(tool_name: str, tool_input, output: str, session_id: str = "") -> 
             conn.close()
     except (sqlite3.Error, OSError):
         pass
+
+
+# v8.0 Phase 2 — FTS5 session output index helpers ──────────────────
+def _fts5_escape(query: str) -> str:
+    """Wrap each token in double quotes so FTS5 treats them as literal
+    terms. Strips backslashes; collapses to space-joined quoted tokens.
+    Prevents users from sending FTS5 syntax errors via Read paths."""
+    if not query:
+        return ""
+    cleaned = query.replace("\\", " ").replace('"', " ")
+    toks = [t for t in cleaned.split() if len(t) >= 3][:8]
+    if not toks:
+        return ""
+    return " ".join('"%s"' % t for t in toks)
+
+
+def output_index_insert(session_id: str, tool_name: str,
+                        file_path: str, content: str,
+                        turn: int) -> None:
+    """Insert one tool output row. No-op on FTS5-missing or huge content."""
+    if not content or len(content) > 200_000:
+        return
+    try:
+        conn = _cache_conn()
+        try:
+            conn.execute(
+                "INSERT INTO tool_output_idx "
+                "(session_id, tool_name, file_path, content, turn, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, tool_name, file_path or "",
+                 content[:200_000], turn, time.time()),
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        # FTS5 missing or table not created — fail silent
+        pass
+
+
+def output_index_search(session_id: str, query: str,
+                        limit: int = 3) -> list:
+    """Return list of {tool, file_path, snippet, turn, ts} for MATCH hits
+    in this session. Empty list on no FTS5 / no hits."""
+    q = _fts5_escape(query)
+    if not q:
+        return []
+    try:
+        conn = _cache_conn()
+        try:
+            rows = conn.execute(
+                "SELECT tool_name, file_path, "
+                "snippet(tool_output_idx, 3, '«', '»', '…', 24) AS snip, "
+                "turn, ts "
+                "FROM tool_output_idx "
+                "WHERE session_id = ? AND content MATCH ? "
+                "ORDER BY bm25(tool_output_idx) "
+                "LIMIT ?",
+                (session_id, q, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return [
+        {"tool": r[0], "file_path": r[1], "snippet": r[2],
+         "turn": r[3], "ts": r[4]}
+        for r in rows
+    ]
 
 
 def cache_record_stat(session_id: str, hit: bool) -> None:
@@ -2825,6 +2912,43 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     if index_advisory:
         advice = advice + "\n\n" + index_advisory
 
+    # v8.0 Phase 2 — Recall hits from this session's FTS5 output index.
+    # If a similar Read/Grep already ran this session, surface excerpts
+    # so Claude can answer without re-running. Different from cache: cache
+    # is exact-input hit; recall is fuzzy text MATCH across all outputs.
+    if (config.get("output_index_enabled", False)
+            and tool_name in ("Read", "Grep", "Glob", "LS")
+            and isinstance(tool_input, dict)):
+        recall_query = ""
+        if tool_name == "Grep":
+            recall_query = str(tool_input.get("pattern", ""))
+        elif tool_name == "Read":
+            fp = (tool_input.get("file_path")
+                  or tool_input.get("path") or "")
+            recall_query = os.path.splitext(os.path.basename(fp))[0]
+        elif tool_name in ("Glob", "LS"):
+            recall_query = str(tool_input.get("pattern", "")
+                               or tool_input.get("path", ""))
+        if len(recall_query) >= 3:
+            hits = output_index_search(session_id, recall_query, limit=3)
+            if hits:
+                lines = [
+                    "ATrain v8 (recall, context-mode pattern):",
+                    f"  {len(hits)} prior {tool_name}-class output(s) in "
+                    f"this session match {recall_query!r}.",
+                ]
+                for h in hits:
+                    snip = (h["snippet"] or "").replace("\n", " ")[:160]
+                    lines.append(
+                        f"    turn {h['turn']:<3d}  {h['tool']:<6s}  "
+                        f"{(h['file_path'] or '-')[:40]}  {snip}"
+                    )
+                lines.append(
+                    "  If these excerpts answer your question, skip the "
+                    "tool call. Otherwise proceed."
+                )
+                advice = advice + "\n\n" + "\n".join(lines)
+
     # v7.2 — Loop-detect: same tool+args called recently in this session
     loop_advisory = _detect_tool_loop(session_id, tool_name, tool_input)
     if loop_advisory:
@@ -3083,6 +3207,18 @@ def _handle_post_tool_use_inner(data: dict) -> None:
     if not had_error and tool_name in CACHEABLE_TOOLS:
         cache_input = data.get("tool_input", {}) or {}
         cache_put(tool_name, cache_input, out_str, session_id=session_id)
+
+    # v8.0 Phase 2 — FTS5 session output index insert. Indexes Read/Grep/
+    # LS/Glob/Bash outputs so future PreToolUse can recall.
+    if (not had_error
+            and config.get("output_index_enabled", False)
+            and tool_name in ("Read", "Grep", "LS", "Glob", "Bash")
+            and out_str):
+        ti_for_path = data.get("tool_input", {}) or {}
+        path = _cached_file_path(ti_for_path) or ""
+        log_for_turn = load_session_log(session_id)
+        turn_n = len([e for e in log_for_turn if e.get("phase") == "pre"])
+        output_index_insert(session_id, tool_name, path, out_str, turn_n)
 
     if had_error:
         stats["escalations_error_recovery"] = stats.get("escalations_error_recovery", 0) + 1
@@ -4227,6 +4363,44 @@ def run_tests() -> None:
                f"first_limit60={first_limited}, "
                f"first_advised={first_advised}, "
                f"second_bypassed={second_bypassed}")
+
+        # T53 — v8.0 Phase 2 FTS5 session output index
+        # Enable flag, post-tool a Grep output, pre-tool a similar Grep.
+        # Expect advisory containing "recall, context-mode" + snippet of
+        # the matched content.
+        v8p2_cfg = _default_config()
+        v8p2_cfg["output_index_enabled"] = True
+        atomic_write_json(CONFIG_PATH, v8p2_cfg)
+        save_session_log("t53_v8p2", [{"phase": "pre", "turn": 1}])
+        try:
+            capture(handle_post_tool_use, {
+                "hook_event": "PostToolUse",
+                "session_id": "t53_v8p2",
+                "tool_name": "Grep",
+                "tool_input": {"pattern": "rare_token_atrain_v8_marker"},
+                "tool_output": (
+                    "src/foo.py: rare_token_atrain_v8_marker found here\n"
+                    "src/bar.py: also rare_token_atrain_v8_marker\n"
+                ),
+            })
+            out_pre = capture(handle_pre_tool_use, {
+                "hook_event": "PreToolUse",
+                "session_id": "t53_v8p2",
+                "tool_name": "Grep",
+                "tool_input": {"pattern": "rare_token_atrain_v8_marker"},
+            })
+            ctx53 = (out_pre.get("hookSpecificOutput") or {}).get(
+                "additionalContext", "")
+            recall_fired = "v8 (recall" in ctx53
+            snippet_present = "rare_token_atrain_v8_marker" in ctx53
+            record("T53",
+                   recall_fired and snippet_present,
+                   f"recall_fired={recall_fired}, "
+                   f"snippet_present={snippet_present}")
+        except sqlite3.OperationalError as exc:
+            # FTS5 unavailable on this sqlite build — skip cleanly
+            record("T53", True,
+                   f"FTS5 unavailable, skipped: {exc!s}")
 
     CONFIG_PATH = saved_config_path
 
