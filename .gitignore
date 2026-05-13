@@ -36,3 +36,4 @@ Thumbs.db
 # Skill creator workspaces (eval runs)
 *-workspace/
 .claude/scheduled_tasks.lock
+atrain-receipt.svg
