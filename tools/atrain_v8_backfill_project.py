@@ -6,7 +6,32 @@ Idempotent (INSERT OR IGNORE). One-time migration after Phase 2c ships
 so cross-session recall with project filter can find prior session
 outputs.
 """
-import pathlib, sqlite3, sys, time
+import json, pathlib, sqlite3, sys, time
+
+
+def _cwd_from_jsonl(jp):
+    """Read the first JSON record of a Claude Code transcript and return
+    its `cwd` field. Falls back to the encoded ~/.claude/projects/ dir
+    only if the field is missing. Required so the live router's
+    project_only filter (which compares against os.getcwd()) matches
+    backfilled rows."""
+    try:
+        with open(jp, "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except ValueError:
+                    return str(jp.parent.resolve())
+                c = obj.get("cwd")
+                if isinstance(c, str) and c:
+                    return c
+                return str(jp.parent.resolve())
+    except OSError:
+        pass
+    return str(jp.parent.resolve())
 
 
 def main():
@@ -28,10 +53,10 @@ def main():
     mapping = {}
     for jp in proj_root.rglob("*.jsonl"):
         sid = jp.stem
-        # ~/.claude/projects/<encoded-dir>/<sid>.jsonl — the parent
-        # dir name is the URL-encoded project path; that's the
-        # canonical project_id we use.
-        mapping[sid] = str(jp.parent.resolve())
+        # session_id -> real cwd (parsed from the first record of the
+        # transcript). Falls back to the parent dir if the field is
+        # absent.
+        mapping[sid] = _cwd_from_jsonl(jp)
     elapsed = time.time() - t0
     print(f"Found {len(mapping)} session -> project mappings "
           f"in {elapsed:.1f}s")
@@ -47,7 +72,7 @@ def main():
         ).fetchone()[0]
         for sid, pdir in mapping.items():
             conn.execute(
-                "INSERT OR IGNORE INTO session_project "
+                "INSERT OR REPLACE INTO session_project "
                 "(session_id, project_dir) VALUES (?, ?)",
                 (sid, pdir),
             )

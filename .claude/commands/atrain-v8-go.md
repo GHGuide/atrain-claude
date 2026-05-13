@@ -28,8 +28,27 @@ os.replace(tmp, p)
 db_path = pathlib.Path.home() / ".claude" / "router-cache.sqlite"
 proj_root = pathlib.Path.home() / ".claude" / "projects"
 backfilled = 0
+def _cwd_from_jsonl(jp):
+    try:
+        with open(jp, "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except ValueError:
+                    return str(jp.parent.resolve())
+                c = obj.get("cwd")
+                if isinstance(c, str) and c:
+                    return c
+                return str(jp.parent.resolve())
+    except OSError:
+        pass
+    return str(jp.parent.resolve())
+
 if db_path.exists() and proj_root.exists():
-    mapping = {jp.stem: str(jp.parent.resolve())
+    mapping = {jp.stem: _cwd_from_jsonl(jp)
                for jp in proj_root.rglob("*.jsonl")}
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     try:
@@ -42,7 +61,7 @@ if db_path.exists() and proj_root.exists():
         ).fetchone()[0]
         for sid, pdir in mapping.items():
             conn.execute(
-                "INSERT OR IGNORE INTO session_project "
+                "INSERT OR REPLACE INTO session_project "
                 "(session_id, project_dir) VALUES (?, ?)",
                 (sid, pdir),
             )
