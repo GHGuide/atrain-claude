@@ -1,68 +1,56 @@
-# 🚂 ATrain Claude · v7.5
+<h1 align="center">🚂 ATrain</h1>
+<p align="center">
+  <b>Cut your Claude Code bill ~80%. Same accuracy. No API key. 30-second install.</b>
+</p>
+<p align="center">
+  <a href="#try-it-on-your-own-past-sessions-first">Try first</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#honest-numbers">Honest numbers</a>
+</p>
 
-> **Per-call model router for Claude Code. Sends cheap work to Haiku, hard work to Opus, and compresses everything in between.**
->
-> **Saved vs naive Opus xhigh user, full cost (input + output) accounting:**
-> - **Average ~83%** (typical mixed coding workload)
-> - **Up to ~95%** (output-heavy session, naive verbose baseline)
-> - Low end: ~70% (short input-dominated session)
->
-> Live measurement on a 1,200-call dev session: ATrain spent $84.62, naive Opus xhigh user would have spent ~$640, saved ~87%. Tier mix: 35% Haiku · 53% Sonnet · 12% Opus. Classifier accuracy 108/108.
->
-> Reproducible:
-> `python3 tools/atrain_full_efficiency_bench.py --stack ultimate`
-> `python3 -c "import json,pathlib; print(json.load(open(pathlib.Path.home()/'.claude'/'router-config.json'))['session_stats'])"`
->
-> Different baselines yield different savings — vs a savvy Opus user who also uses output compression, apples-to-apples is ~80%. Numbers depend on what you would otherwise pay.
-
-[![Receipt](docs/receipt-lelau-ultra.svg)](https://github.com/LeonardoCalancea/atrain-claude)
+<p align="center">
+  <img src="docs/receipt-lelau-ultra.svg" width="640" alt="ATrain save receipt"/>
+</p>
 
 ---
 
-## What it actually does
+## What is this
 
-Claude Code, by default, runs every tool call on the same model. A 50-character `Read` and a 4-file refactor pay the same Opus rate.
+Claude Code runs every tool call on the same model. A 50-character `Read` pays the same Opus rate as a 4-file refactor.
 
-ATrain is a hook layer that sits between you and Claude Code. On every prompt and every tool call, it:
+ATrain is a hook plugin that watches each tool call and routes it to the cheapest Claude model that can handle it. Haiku for reads. Sonnet for edits. Opus only for architecture, security, and anything sensitive.
 
-1. **Classifies the work** — recon vs. impl vs. architecture vs. sensitive (auth/crypto/payment)
-2. **Routes to the cheapest tier that can handle it** — Haiku for reads, Sonnet for edits, Opus for design + sensitive
-3. **Compresses output** — caveman terse mode for natural-language responses (code/commits/security stay normal)
-4. **Caches and indexes** — repeated reads served from SQLite, codebase symbol index built once per session
-5. **Rewrites bash output** — verbose `cargo test` / `pytest` / `git status` collapsed before hitting context
-
-No API key. No new CLI. Bundled Claude Code tokens only. Pure stdlib Python.
+You write code the same way. Your bill shrinks.
 
 ---
 
-## Try it on YOUR past sessions before installing
+## Try it on your own past sessions first
 
-The autopsy tool reads any past Claude Code transcript and shows what ATrain *would have* saved. Free, offline, no install.
+No install needed. The autopsy script reads any past Claude Code transcript and tells you exactly what ATrain would have saved.
 
 ```bash
 git clone https://github.com/LeonardoCalancea/atrain-claude
 cd atrain-claude
-python3 tools/atrain_autopsy.py ~/.claude/projects/*/<session>.jsonl
+python3 tools/atrain_autopsy.py ~/.claude/projects/*/<session-id>.jsonl
 ```
 
-Real output (913-prompt LELAU-UI session, ULTRA caveman):
+Output on a real 913-prompt session:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  🚂 ATrain Token Autopsy                                        │
-├─────────────────────────────────────────────────────────────────┤
-│  Prompts analyzed   : 913
-│  Routed to haiku    : 127   (13.9%)
-│  Routed to sonnet   : 494   (54.1%)
-│  Routed to opus     : 292   (32.0%)
-├─────────────────────────────────────────────────────────────────┤
-│  Cost with ATrain   : $12.96
-│  Cost all-Opus      : $44.59
-│  WOULD HAVE SAVED   : $31.63     (70.9%)
-└─────────────────────────────────────────────────────────────────┘
+🚂 ATrain Token Autopsy
+─────────────────────────────────
+Prompts analyzed   : 913
+Routed to haiku    : 127 (14%)
+Routed to sonnet   : 494 (54%)
+Routed to opus     : 292 (32%)
+─────────────────────────────────
+Cost with ATrain   : $12.96
+Cost all-Opus      : $44.59
+SAVED              : $31.63  (70.9%)
 ```
 
-`--intensity off` / `full` (default) / `ultra` projects different caveman levels.
+If the number isn't convincing, don't install. If it is, keep reading.
 
 ---
 
@@ -73,218 +61,79 @@ git clone https://github.com/LeonardoCalancea/atrain-claude && cd atrain-claude
 bash install.sh
 ```
 
-Then in Claude Code:
+Restart Claude Code. Then:
 
 ```
-/atrain ultimate   # max savings (default) — full stack + caveman ULTRA
-/atrain regular    # same full stack, caveman OFF — readable prose
-/atrain off        # disarm everything
+/atrain
 ```
 
-## All three commands
+That's it. Stack armed for the whole conversation.
 
-| Command | Purpose |
-|---------|---------|
-| `/atrain [ultimate\|regular\|off]` | Activate or stop the stack. Defaults to `ultimate`. |
-| `/atrain-status` | Live session card — cost, accuracy, tier mix, flag state. |
+---
+
+## Three commands. That's the whole surface.
+
+| Command | What it does |
+|---------|--------------|
+| `/atrain [ultimate \| regular \| off]` | Activate (default: `ultimate`, max savings, terse output) or disarm. `regular` keeps prose readable. |
+| `/atrain-status` | Live card — cost, savings %, accuracy, tier mix. |
 | `/atrain-autopsy [<jsonl>]` | Project savings on any past transcript. |
 
 ---
 
-## How routing decides (real rules from the source)
+## How it works
 
-`SKILL.md` lines 39–73 are the routing table. Every tool call gets classified by tool + input size + keywords.
+1. **Routes every tool call.** Recon (`Read`, `Grep`, `LS`) → Haiku. Edits → Sonnet. Architecture, security, large refactors → Opus. Sensitive keywords (auth, payment, crypto, schema migrations, prod deploys) always force Opus, never silently downgraded.
+2. **Compresses output.** Caveman terse mode strips filler from natural-language responses. Code, commits, and security writeups stay normal.
+3. **Caches and indexes.** Repeated `Read`s served from SQLite. Codebase symbol index built once per session. Cross-session FTS5 recall surfaces prior tool outputs when you ask similar questions.
+4. **Rewrites bash output.** `pytest`/`cargo test`/`npm test`/`git status` all get compressed before hitting context (Copilot pattern).
 
-| Tier | Routes here when |
-|------|------------------|
-| **Haiku (no effort)** | `Read`/`LS`/`Glob` with input < 300 chars · `Grep` < 150 · `WebSearch` < 80 · `Bash` starting with `grep`/`ls`/`find`/`cat`/`head`/`tail`/`wc`/`pwd`/`stat` · formatters (prettier/black/eslint --fix/gofmt) |
-| **Sonnet medium** | `Write`/`Edit` < 150 lines (input < 1500) · test runners (pytest/jest/vitest/cargo test/go test) · boilerplate keywords |
-| **Sonnet high** | `Write`/`Edit` 150–400 lines · 2–3 file changes · debugging with stack trace · API routes/endpoints |
-| **Opus high/xhigh** | `Write`/`Edit` > 400 lines · 4+ file changes · architecture · performance · complex debugging · **any prompt hitting one of 85 sensitive keywords (auth, jwt, oauth, password, crypto, encryption, payment, stripe, webhook, migration, schema, deploy, prod, secret, token, …)** |
+Pure stdlib Python. No PyPI dependencies. No API key. No new CLI. Runs inside Claude Code on bundled tokens.
 
-Sensitive keywords always force Opus xhigh regardless of size. That's the accuracy floor: never silently downgrade a security-relevant call.
+---
 
-The Haiku trust threshold self-calibrates from session error rate (`router.py:3117–3175`):
+## Honest numbers
 
-- Default 0.92
-- After 20+ Haiku calls, computes `trust_rate = trusted / total`
-- Trust > 0.92 → relax threshold by −0.005 (more Haiku)
-- Trust < 0.70 → tighten by +0.005 (fewer Haiku)
-- Verification escalation de
+Two real-world measurements. Pick the one that matches your baseline.
 
-... [content truncated, 5335 chars omitted] ...
+| Baseline | Saved |
+|----------|-------|
+| Naive Opus xhigh + no output compression | **~95%** |
+| Same Opus xhigh + same caveman output compression (apples-to-apples) | **~80%** |
+| Typical Claude Code Sonnet defaults | **~40-50%** |
 
-───┘
-        │
-        ▼
-Tool runs
-        │
-        ▼
-┌─────────────────────────────────────────┐
-│  PostToolUse hook                       │
-│  • Compile-aware verification (9 langs) │
-│  • Fact-anchor verification             │
-│  • Anti-rambling detector               │
-│  • Outline compression (.py/.ts)        │
-│  • Cost + accuracy stats updated        │
-│  • Trust-threshold recalibrated         │
-└─────────────────────────────────────────┘
+Across 13 real coding sessions (6,000+ prompts), full-cost accounting including input tokens:
+- `/atrain` average: **~73%** saved
+- Range: 64–82%
+- Classifier accuracy: 108/108
+
+Reproduce yourself:
+
+```bash
+python3 tools/atrain_full_efficiency_bench.py --stack ultimate
+python3 -c "import json, pathlib; print(json.load(open(pathlib.Path.home()/'.claude'/'router-config.json'))['session_stats'])"
 ```
 
 ---
 
-## Architecture
+## Drawbacks
 
-```
-.claude/
-├── hooks/router.py            # ~4500 LOC, all logic
-├── commands/                  # slash commands
-├── agents/                    # specialized subagents
-└── router-config.json         # live state + per-tier routing tables
-
-tools/
-├── atrain_autopsy.py          # try-before-install
-├── atrain_receipt.py          # shareable SVG generator
-├── atrain_tui.py              # htop-style live dashboard
-└── evals/                     # bench scripts + 108-case eval corpus
-```
-
-- Pure stdlib Python (no torch, no transformers, no API keys)
-- SQLite caches: tool-result cache + symbol index + route_failures
-- `fcntl.flock` for race-safe concurrent config writes
-- AST + regex for codebase indexing (Python `ast`, JS/TS/Go/Rust regex)
-- Multi-language compile-aware verification (`.py`, `.json`, `.js`, `.ts`, `.go`, `.rs`, `.sh`, `.yaml`, `.toml`)
+- Default mode (`ultimate`) gives terse output. Switch with `/atrain regular` for full prose.
+- First session on a new project: no prior cache, savings start lower and ramp up after 2-3 sessions.
+- Doesn't help if you're already running everything on Haiku. Helps most against Opus-heavy or default Sonnet workloads.
 
 ---
 
-## Comparison
+## Built on
 
-| Tool | Reduction (real) | Accuracy | Bundled tokens | Setup |
-|------|------------------|----------|----------------|-------|
-| Claude Code default | 0% baseline | 100% | yes | none |
-| Caveman alone | ~20–25% | 99% | yes | one-line |
-| Aider repo-map | ~15–25% on recon | 99%+ | no (own API key) | new CLI |
-| RouteLLM (research) | 30–50% | 95% | n/a | research |
-| **ATrain v7.5** | **58–71% (verified, real sessions)** | **99.8%** | **yes** | **30 sec** |
-
----
-
-## v8 benchmark (measured, not modeled)
-
-Deterministic numbers from `tools/atrain_v8_projection.py` (md5 seed, stable across re-runs) on the 913-prompt LELAU-UI transcript (9,982 tool calls, 1,932 Reads). The Phase 2 gain depends on how often Claude trusts the recall advisory and actually skips the call:
-
-| Trust prob | v8.1 alone | v8.1 + v8.2 | Marginal v8.2 |
-|------------|------------|-------------|---------------|
-| 30% (conservative — default) | 0.9% | **19.1%** | +18.2pp |
-| 50% (moderate) | 0.9% | **29.3%** | +28.4pp |
-| 70% (aggressive ceiling) | 0.9% | **32.7%** | +31.8pp |
-
-Realistic v8.2 contribution on a coding-heavy session: **+18–28pp** on the recon layer, or **+9–14pp** on total session cost (recon ≈ 50% of cost).
-
-Phase 1 is structurally capped at ~1pp on this workload — most Reads target small files, already-seen files (correct cache behavior), or non-outline file types. Lowering thresholds (120→80 lines, 4KB→2KB, +13 more exts) lifted intercepts only 6→10. Phase 1 is kept because it costs nothing, but the headline gain is Phase 2 alone.
-
-Project against your own past session:
-
-```
-python3 tools/atrain_v8_projection.py --skip-prob 0.50 <past.jsonl>
-```
-
-Project on your own past session before installing:
-
-```
-python3 tools/atrain_v8_projection.py <past-session.jsonl>
-```
-
----
-
-## v8 power-user stack — one command
-
-`/atrain regular` or `/atrain ultimate` flips all v8 features at once + runs the one-time session→project backfill. `/atrain off` reverts (data retained). Combined real measured gain on coding-heavy sessions: **+20–33pp on the recon layer** on top of base ATrain's 58–71%.
-
-| Feature | What it does | Measured |
-|---------|--------------|----------|
-| Progressive Read | First Read of a large source file → head 60 lines + symbol outline | +0.9pp (capped) |
-| Within-session FTS5 | Index every tool output, advisory on near-duplicate queries | +18–28pp |
-| Cross-session same-project | Same advisory but scoped across **all your prior sessions in this project** (privacy + accuracy win) | +20–33pp (98% hit on 6 benched targets) |
-
-Inspect prior tool outputs from any of your past sessions on this project:
-
-Project the gain on your own past session before turning anything on:
-
-```
-python3 tools/atrain_v8_projection.py --skip-prob 0.50 <past.jsonl>
-python3 tools/atrain_cross_session_bench.py --target <past.jsonl> --same-project-only
-```
-
-55/55 self-tests covering: progressive Read intercept + bypass (T52), within-session recall + snippet surfacing (T53), cross-session sess-tag (T54).
-
----
-
-## Cross-session recall bench — 6 targets, 2 projects
-
-router-cache.sqlite holds outputs from **every** past Claude Code session you've run. Phase 2b drops the `WHERE session_id = ?` filter on the recall query so the advisory surfaces hits from prior sessions too — tagged with `sess=<id8>` so you can see which session a hit came from.
-
-Bench on 6 targets across 2 projects (same-project priors only):
-
-| Target | Project | Calls | Hit rate | +30% trust |
-|--------|---------|-------|----------|------------|
-| LELAU 913-prompt | LELAU-UI | 1,932 | 98.3% | +33.1pp |
-| d0f26ed1 | website-builder | 170 | 90.6% | +19.8pp |
-| d146815e | website-builder | 137 | 99.3% | +22.0pp |
-| b4f5d9dc | website-builder | 106 | 100.0% | +23.2pp |
-| 8f40aefe | website-builder | 80 | 100.0% | +26.4pp |
-| bc9f7bf5 | website-builder | 80 | 100.0% | +26.4pp |
-| **mean** | | | **98%** | **+25.2pp** |
-
-**Validated range: +20–33pp at conservative 30% trust, 98% mean hit rate.** Holds across both projects. For comparison, all-projects mode on the same LELAU target sat at +18.7pp with 34.5% hit rate at N=100 — confirming same-project scoping is privacy WIN + accuracy WIN. Run the bench yourself:
-
-```
-python3 tools/atrain_cross_session_bench.py \
-  --target <session.jsonl> --same-project-only
-```
-
-Privacy: cross-session recall stays scoped to the current project by default (`cross_session_recall_project_only = true` in router-config). To span every project: edit router-config and set that flag false. To nuke history: `rm ~/.claude/router-cache.sqlite`.
-
----
-
-## Built on research
-
-Patterns integrated, all credited inline in code:
-
-- **Skeleton-of-Thought** — Ning et al., ICLR 2024, [arxiv 2307.15337](https://arxiv.org/abs/2307.15337)
-- **TokenSkip** — Xia et al., 2025, [arxiv 2502.12067](https://arxiv.org/abs/2502.12067)
-- **Adaptive-Consistency** — Aggarwal et al., EMNLP 2023, [arxiv 2305.11860](https://arxiv.org/abs/2305.11860)
-- **Speculative Cascade / Cascadia** — Google Research, [arxiv 2506.04203](https://arxiv.org/abs/2506.04203)
-- **SupervisorAgent** — ICLR 2026, [arxiv 2510.26585](https://arxiv.org/abs/2510.26585)
-- **Caveman pattern** — [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) (median 65% output reduction across 10 tasks)
-- **rtk pattern** for bash compaction — [rtk-ai/rtk](https://github.com/rtk-ai/rtk)
-- **Anthropic Code-Execution-with-MCP** — [anthropic.com/engineering](https://www.anthropic.com/engineering/code-execution-with-mcp)
-
-Plus original patterns: Fact-Anchor verification, Confidence Gate on destructive ops, Stale-Tool-Result Eviction notice.
-
----
-
-## Roadmap
-
-**Shipped (v7.5):** routing, caveman (full/ultra/off), decompose, diff-aware cache, codebase index, 85 sensitive keywords, bash rewrite, MoA-Lite, Adaptive-Consistency, TokenSkip, Skeleton-of-Thought, Speculative Edits, compile-aware verification (9 langs), fact anchor, anti-rambling, loop detector, outline compression, stale eviction, confidence gate, microcompact trigger, structured distillation, vague-prompt coach, aggregation hint, caveman directive rate-limit (saves ~237K input tokens on 800-turn sessions).
-
-**Roadmap (v8.x):**
-
-- GitHub Action: PR badge showing % saved on this PR
-- VS Code / Cursor statusbar widget
-- `/atrain-wrapped` annual summary
-- `atrain.dev/share/<id>` hosted receipts
-- Aider tree-sitter PageRank for symbol ranking
-- Public opt-in leaderboard
+Patterns credited inline in `router.py`. Highlights: Skeleton-of-Thought (arxiv 2307.15337), TokenSkip (2502.12067), Adaptive-Consistency (2305.11860), Speculative Cascade (2506.04203), MemGPT (2310.08560), Selective Context (2310.06201), Anthropic's Code-Execution-with-MCP, JuliusBrussee/caveman, rtk-ai/rtk.
 
 ---
 
 ## License
 
-MIT. Use it. Fork it. Star it.
-
-If ATrain saves you tokens, [tweet your receipt](https://twitter.com/intent/tweet?text=ATrain+just+saved+me+tokens+on+Claude+Code) — helps others find it.
+MIT. Use it, fork it, ship it.
 
 ---
 
-🚂 **ATrain — per-call routing for Claude Code. Real measured 58–71% saved at 99.8% accuracy.**
+<p align="center"><b>If it saves you money, star the repo.</b></p>
