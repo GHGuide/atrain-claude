@@ -3562,18 +3562,44 @@ def _handle_post_tool_use_inner(data: dict) -> None:
 
     model_def = config["model_registry"].get(alias, {})
     out_price = model_def.get("output_price_per_1m", 15.0)
-    actual_cost = token_est * (out_price / 1_000_000.0)
+    in_price = model_def.get("input_price_per_1m", 3.0)
+
+    # v9.6 — Input token accounting. Hook can't observe Claude's
+    # full prompt context (system prompt, conversation history, tool
+    # definitions) directly, so estimate from tool_input size + a
+    # conservative system-prompt overhead constant. ATrain and baseline
+    # both pay the SAME input cost (input is not compressed by caveman),
+    # but at different per-tier prices.
+    INPUT_OVERHEAD_TOK = 5000  # rough system+history+tools per call
+    try:
+        ti_str = json.dumps(data.get("tool_input", {}), default=str)
+    except Exception:
+        ti_str = ""
+    input_tok = INPUT_OVERHEAD_TOK + len(ti_str) // 4
+
+    actual_input_cost = input_tok * (in_price / 1_000_000.0)
+    baseline_input_cost = input_tok * (15.0 / 1_000_000.0)  # opus xhigh
+
+    actual_cost = token_est * (out_price / 1_000_000.0) + actual_input_cost
     # v7.3 — baseline price fix. Was $25/M (wrong — that's roughly
     # Sonnet output, not Opus xhigh). Real Opus 4.7 output = $75/M.
     # Saved% was understating actual savings 3x. Now reflects true
     # "what if you'd run this on Opus xhigh" baseline.
-    baseline_cost = baseline_token_est * (75.0 / 1_000_000.0)
+    baseline_cost = (baseline_token_est * (75.0 / 1_000_000.0)
+                     + baseline_input_cost)
     stats["estimated_cost_usd"] = stats.get("estimated_cost_usd", 0.0) + actual_cost
     stats["baseline_opus_xhigh_cost_usd"] = (
         stats.get("baseline_opus_xhigh_cost_usd", 0.0) + baseline_cost
     )
     stats["estimated_savings_usd"] = (
         stats["baseline_opus_xhigh_cost_usd"] - stats["estimated_cost_usd"]
+    )
+    # Track input separately for transparency in /atrain-status
+    stats["input_cost_usd"] = (
+        stats.get("input_cost_usd", 0.0) + actual_input_cost
+    )
+    stats["baseline_input_cost_usd"] = (
+        stats.get("baseline_input_cost_usd", 0.0) + baseline_input_cost
     )
 
     # v4.0 honest accounting — only credit "real_savings_usd" when the
