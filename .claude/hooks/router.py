@@ -1728,7 +1728,11 @@ def output_index_search(session_id: str, query: str,
 
 # v8.0 Phase 3 — curated cross-session memory helpers ─────────────────
 def memory_add(project_dir: str, category: str, text: str) -> int:
-    """Insert one memory entry. Returns the new row id or -1 on error."""
+    """Insert one memory entry. Returns the new row id or -1 on error.
+    v9 — Periodic MemGPT-style eviction: every ~32 inserts, drop entries
+    older than 90 days that were never recalled (hit_count = 0). Keeps
+    memory_entries from growing unboundedly without losing actually-used
+    knowledge."""
     if not text or len(text) > 4000:
         return -1
     cat = category.lower().strip()
@@ -1744,6 +1748,17 @@ def memory_add(project_dir: str, category: str, text: str) -> int:
                 (project_dir, cat, text[:4000], time.time()),
             )
             new_id = cur.lastrowid or -1
+            # Periodic eviction (~3% of inserts) to bound table growth.
+            if (new_id or 0) % 32 == 0 and new_id and new_id > 0:
+                cutoff = time.time() - 90 * 86400
+                try:
+                    conn.execute(
+                        "DELETE FROM memory_entries "
+                        "WHERE hit_count = 0 AND ts < ?",
+                        (cutoff,),
+                    )
+                except sqlite3.Error:
+                    pass
         finally:
             conn.close()
     except sqlite3.Error:
