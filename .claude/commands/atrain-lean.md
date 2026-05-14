@@ -1,5 +1,5 @@
 ---
-description: ATrain LEAN — routing only. No advisories, no decompose, no subagent fan-out. Best for preserving weekly token limit. Smaller savings than ULTIMATE but minimum overhead.
+description: ATrain LEAN — minimum token consumption. Routing + caveman + bash-rewrite stay on. Decompose fan-out + all v8 advisories OFF. Best when your weekly limit matters more than $ saved.
 ---
 
 User invoked `/atrain-lean`.
@@ -15,18 +15,15 @@ proj = pathlib.Path(".claude/router-config.json")
 p = home if home.exists() else proj
 cfg = json.loads(p.read_text()) if p.exists() else {}
 
-# Routing core ON
 cfg["mode"] = "balanced"
 cfg["accuracy_target"] = 99.0
-cfg["bash_pre_rewrite_enabled"] = True  # bash compaction still on (output-side)
-
-# All advisory/decompose features OFF
-cfg["decompose_enabled"] = False              # no fan-out push
-cfg["progressive_read_enabled"] = False       # no Read intercept advisory
-cfg["output_index_enabled"] = False           # no FTS5 recall hints
-cfg["cross_session_recall_enabled"] = False   # no cross-session advisory
-cfg["advisory_pruning_enabled"] = False       # nothing to prune
-cfg["caveman_intensity"] = "full"             # still compress output
+cfg["bash_pre_rewrite_enabled"] = True
+cfg["decompose_enabled"] = False
+cfg["progressive_read_enabled"] = False
+cfg["output_index_enabled"] = False
+cfg["cross_session_recall_enabled"] = False
+cfg["advisory_pruning_enabled"] = False
+cfg["caveman_intensity"] = "full"
 
 empty_tier = {k: 0 for k in [
     "haiku_none","sonnet_low","sonnet_medium","sonnet_high","sonnet_max",

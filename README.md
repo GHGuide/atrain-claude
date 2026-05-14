@@ -71,15 +71,16 @@ That's it. Stack armed for the whole conversation. Switch to readable prose with
 
 ---
 
-## Five commands. That's the whole surface.
+## Six commands. That's the whole surface.
 
-| Command | What it does |
-|---------|--------------|
-| `/atrain-ultimate` | Max savings. Caveman ULTRA output + full v8 stack. |
-| `/atrain-regular`  | Same v8 stack, caveman OFF, readable prose. |
-| `/atrain-kill`     | Disarm everything. Data retained in cache DB. |
-| `/atrain-status`   | Live card — cost, savings %, accuracy, tier mix. |
-| `/atrain-autopsy`  | Project savings on any past transcript. |
+| Command | What it does | Best for |
+|---------|--------------|----------|
+| `/atrain-ultimate` | Max **$** savings. Caveman ULTRA + full v8 stack. | API-billed users, $ matters most |
+| `/atrain-lean`     | Min **token** usage. Routing + caveman + bash-rewrite only. No advisories, no fan-out. | Weekly-limit users (Pro/Max plans) |
+| `/atrain-regular`  | Full v8 stack, caveman OFF, readable prose. | Want explanations, docs, prose |
+| `/atrain-kill`     | Disarm everything. Data retained in cache DB. | Pause |
+| `/atrain-status`   | Live card — cost, savings %, accuracy, tier mix. | Mid-session check |
+| `/atrain-autopsy`  | Project savings on any past transcript. | Try before install |
 
 ---
 
