@@ -18,7 +18,7 @@ cfg = json.loads(p.read_text()) if p.exists() else {}
 # Same stack as ULTIMATE, caveman OFF
 cfg["mode"] = "balanced"
 cfg["accuracy_target"] = 99.0
-cfg["decompose_enabled"] = True
+cfg["decompose_enabled"] = False  # NO fan-out (Max-plan safe)
 cfg["bash_pre_rewrite_enabled"] = True
 cfg["progressive_read_enabled"] = True
 cfg["output_index_enabled"] = True

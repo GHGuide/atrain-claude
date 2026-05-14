@@ -85,11 +85,13 @@ def bench_session(jp, stack="base"):
     tier_count = {"haiku": 0, "sonnet": 0, "opus": 0}
     atrain_total = 0.0
     opus_total = 0.0
-    # Caveman factor: full=0.35, ultra=0.20
+    # Caveman factor: full=0.35, ultra=0.20.
+    # lean uses caveman FULL (same as base). ultimate uses ULTRA.
     cav_factor = 0.20 if stack == "ultimate" else 0.35
     # v8.2 recall savings on recon calls (~50% of cost). 18pp marginal
     # at 30% trust per measured bench. Modeled as flat 9pp reduction
     # on the ATrain cost since recon is roughly half the workload.
+    # Only ultimate has recall ON; lean and base do not.
     v8_recon_multiplier = (1 - 0.18 * 0.5) if stack == "ultimate" else 1.0
     for prompt in prompts:
         m = classify(prompt)
@@ -124,7 +126,7 @@ def main():
                     help="Skip sessions with fewer prompts (filters out "
                          "subagent dispatches that are 1-prompt agents).")
     ap.add_argument("--stack",
-                    choices=["base", "ultimate"],
+                    choices=["base", "lean", "ultimate"],
                     default="base",
                     help="base = caveman full only. "
                          "ultimate = caveman ultra + v8.2 recall "
