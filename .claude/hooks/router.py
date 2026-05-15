@@ -1070,15 +1070,17 @@ _PROGRESSIVE_READ_MIN_LINES = 80
 _PROGRESSIVE_READ_MIN_BYTES = 2_000
 
 
-def _progressive_read_intercept(tool_input, log):
+def _progressive_read_intercept(tool_input, log, aggressive=False):
     """Return (new_input_or_None, advisory_or_empty).
 
     Only fires when ALL of:
     - tool_input has a file_path
-    - path ext is outline-capable
+    - path ext is outline-capable (skipped when aggressive=True — any
+      file >120 lines gets head-clipped)
     - file exists on disk and is large enough
     - user did NOT pass offset/limit (they know what they want)
-    - this file has not been outlined this session yet
+    - this file has not been outlined this session yet (skipped when
+      aggressive=True so EVERY big Read is clipped, not just first)
     """
     if not isinstance(tool_input, dict):
         return None, ""
@@ -1088,7 +1090,7 @@ def _progressive_read_intercept(tool_input, log):
     if "offset" in tool_input or "limit" in tool_input:
         return None, ""
     _, ext = os.path.splitext(path.lower())
-    if ext not in _OUTLINE_OK_EXTS:
+    if not aggressive and ext not in _OUTLINE_OK_EXTS:
         return None, ""
     try:
         sz = os.path.getsize(path)
@@ -1096,10 +1098,13 @@ def _progressive_read_intercept(tool_input, log):
         return None, ""
     if sz < _PROGRESSIVE_READ_MIN_BYTES or sz > _OUTLINE_MAX_BYTES:
         return None, ""
-    # Already outlined? Bypass.
-    for entry in log:
-        if entry.get("outlined_path") == path:
-            return None, ""
+    # Already outlined? Bypass (skipped under aggressive mode so every
+    # subsequent Read of the same file also gets clipped — Max-plan
+    # users almost never need full body re-reads).
+    if not aggressive:
+        for entry in log:
+            if entry.get("outlined_path") == path:
+                return None, ""
     try:
         src = open(path, encoding="utf-8", errors="ignore").read()
     except OSError:
@@ -2671,10 +2676,26 @@ def handle_session_start(data: dict) -> None:
         age_hours = 999.0
 
     parts = []
-    # v6.1 — session memory injection for project continuity
-    memory_text = load_session_memory_for_inject()
-    if memory_text:
-        parts.append(memory_text)
+    # v9.7 — lean_mode SessionStart preamble. Single short directive
+    # that primes Claude for terse, quota-aware behavior. Replaces the
+    # memory-digest injection (which adds tokens we don't want on
+    # Max plan). Stronger than caveman because it lands once at
+    # SessionStart and persists across all turns.
+    if config.get("lean_mode", False):
+        parts.append(
+            "ATrain lean active. Max-plan workflow rules:\n"
+            "  - Avoid re-reading files. Trust prior context.\n"
+            "  - Use Grep with `--max-count=5` to scope, not list.\n"
+            "  - Prefer outline / `head -50` over full-body Reads.\n"
+            "  - When asked to fix, edit immediately. Don't recon "
+            "the whole repo first.\n"
+            "  - Terse responses. Code/security stay normal."
+        )
+    else:
+        # v6.1 — session memory injection for project continuity
+        memory_text = load_session_memory_for_inject()
+        if memory_text:
+            parts.append(memory_text)
 
     # v6.8 — auto-build codebase index in background if missing.
     # Saves 15-25% on recon chunks once warm. Idempotent.
@@ -2991,6 +3012,25 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         cache_record_stat(session_id, bool(hit))
         if hit:
             excerpt = hit["output"][:300].replace("\n", " ")
+            # v9.7 — lean_mode upgrades duplicate-detect from advisory
+            # to permissionDecision: "ask". Forces Claude to confirm
+            # before re-running a recent identical call. Saves direct
+            # tokens on Max plan instead of relying on advisory adherence.
+            if config.get("lean_mode", False):
+                sys.stdout.write(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "ask",
+                        "permissionDecisionReason": (
+                            f"ATrain lean: duplicate {tool_name} — same "
+                            f"input ran {int(hit['age_sec'])}s ago "
+                            f"({len(hit['output'])} chars). Use cached "
+                            f"excerpt: '{excerpt[:200]}…' OR approve to "
+                            f"re-run if the file/state changed."
+                        ),
+                    }
+                }))
+                return
             cache_advisory = (
                 f"smart-router: duplicate {tool_name} detected — same "
                 f"input was called {int(hit['age_sec'])}s ago and returned "
@@ -3091,15 +3131,17 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     # updatedInput as of v2.0.10.
     compacted_input, was_compacted = compact_tool_input(tool_input)
 
-    # v8.0 — Progressive Read disclosure intercept. Init advisory to
-    # empty so downstream `if progressive_advisory` never NameErrors.
+    # v8.0 + v9.7 — Progressive Read disclosure intercept.
+    # lean_mode upgrades this to AGGRESSIVE: fires on every Read of any
+    # file >120 lines (not just first encounter, not just .py/.js/etc).
     progressive_advisory = ""
+    _lean = bool(config.get("lean_mode", False))
     if (tool_name == "Read"
-            and config.get("progressive_read_enabled", False)
+            and (config.get("progressive_read_enabled", False) or _lean)
             and isinstance(compacted_input, dict)):
         log_for_check = load_session_log(session_id)
         new_ti, advisory = _progressive_read_intercept(
-            compacted_input, log_for_check
+            compacted_input, log_for_check, aggressive=_lean
         )
         if new_ti is not None:
             compacted_input = new_ti
