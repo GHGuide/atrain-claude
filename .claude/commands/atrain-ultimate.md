@@ -17,6 +17,7 @@ cfg = json.loads(p.read_text()) if p.exists() else {}
 
 # Base profile
 cfg["mode"] = "balanced"
+cfg["lean_mode"] = False
 cfg["accuracy_target"] = 99.0
 cfg["decompose_enabled"] = True
 cfg["bash_pre_rewrite_enabled"] = True
@@ -71,6 +72,19 @@ cfg["caveman_intensity"] = "ultra" if prior_count >= 3 else "full"
 tmp = p.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(cfg, indent=2))
 os.replace(tmp, p)
+
+# Also mirror to project config for repo-local dev testing.
+proj_cfg = pathlib.Path(".claude/router-config.json")
+if proj_cfg.exists() and proj_cfg.resolve() != p.resolve():
+    try:
+        pcfg = json.loads(proj_cfg.read_text())
+        for k, v in cfg.items():
+            pcfg[k] = v
+        tmp2 = proj_cfg.with_suffix(".json.tmp")
+        tmp2.write_text(json.dumps(pcfg, indent=2))
+        os.replace(tmp2, proj_cfg)
+    except (OSError, ValueError):
+        pass
 
 print("+----------------------------------------------------------+")
 print("|  ATrain ULTIMATE — ARMED                                 |")

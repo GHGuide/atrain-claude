@@ -19,12 +19,26 @@ cfg["progressive_read_enabled"] = False
 cfg["output_index_enabled"] = False
 cfg["cross_session_recall_enabled"] = False
 cfg["advisory_pruning_enabled"] = False
+cfg["lean_mode"] = False
 cfg["caveman_intensity"] = None
 cfg["decompose_enabled"] = False
 
 tmp = p.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(cfg, indent=2))
 os.replace(tmp, p)
+
+# Also mirror to project config for repo-local dev testing.
+proj_cfg = pathlib.Path(".claude/router-config.json")
+if proj_cfg.exists() and proj_cfg.resolve() != p.resolve():
+    try:
+        pcfg = json.loads(proj_cfg.read_text())
+        for k, v in cfg.items():
+            pcfg[k] = v
+        tmp2 = proj_cfg.with_suffix(".json.tmp")
+        tmp2.write_text(json.dumps(pcfg, indent=2))
+        os.replace(tmp2, proj_cfg)
+    except (OSError, ValueError):
+        pass
 
 print("+------------------------------+")
 print("|  ATrain KILLED               |")

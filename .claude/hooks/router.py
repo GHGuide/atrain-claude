@@ -208,6 +208,11 @@ def _default_config() -> dict:
         # accuracy WIN (98% hit rate, no noise). Set false to span
         # every project.
         "cross_session_recall_project_only": True,
+        # v9.6 — lean_mode silences verbose advisories (router class
+        # string, caveman rules block, compile-check / fact-anchor
+        # post-tool hints). Routing still runs, only the input-token
+        # noise gets dropped. /atrain-lean enables this.
+        "lean_mode": False,
         # v9.0 — Selective Context advisory pruning (Li 2023,
         # arxiv 2310.06201). Drops low-information lines from concatenated
         # advisories when total exceeds budget_chars. Saves ~50% of
@@ -2737,6 +2742,12 @@ def handle_user_prompt_submit(data: dict) -> None:
     # caveman. /atrain-go and /atrain-terse set intensity explicitly.
     if intensity is None and mode == "eco":
         intensity = "full"
+    # v9.6 — lean_mode suppresses caveman rules-block injection.
+    # Output style stays caveman (model already primed across the
+    # conversation), input-side rules block dropped to save ~150 tok
+    # per UserPromptSubmit.
+    if config.get("lean_mode", False):
+        intensity = None
     if intensity in ("lite", "full", "ultra"):
         rules = (
             "ATrain caveman mode ACTIVE — terse output, every response.\n\n"
@@ -3043,10 +3054,16 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
     # dispatch (Task tool with subagent_type). The advisory below
     # tells Claude what would have been cheap if dispatched, so the
     # parent session can choose to spawn a subagent instead.
-    advice = (
-        f"smart-router: would route {tool_name} → {model_alias}"
-        f"{effort_text} ({reason} | conf={confidence:.2f})."
-    )
+    # v9.6 — lean_mode suppresses verbose advisories to minimize input
+    # token consumption on Pro/Max plan users. Routing logic still runs
+    # (for stats + cache); only the human-readable advisory is silenced.
+    if config.get("lean_mode", False):
+        advice = ""
+    else:
+        advice = (
+            f"smart-router: would route {tool_name} → {model_alias}"
+            f"{effort_text} ({reason} | conf={confidence:.2f})."
+        )
 
     # v6.2 — Layer 4 codebase index lookup (graphify pattern, native).
     # When user does Grep for what looks like a symbol name AND the
@@ -3250,6 +3267,12 @@ def _handle_pre_tool_use_inner(data: dict) -> None:
         if len(advice) > budget:
             blocks = [b for b in advice.split("\n\n") if b.strip()]
             advice = _prune_advisories(blocks, budget_chars=budget)
+    # v9.6 — lean_mode: hard-clear advice at the final emit point so any
+    # v8 / cache / loop / eviction advisory that escaped earlier guards
+    # is also silenced. Routing still ran (stats updated), just no
+    # additionalContext text returned.
+    if config.get("lean_mode", False):
+        advice = ""
     hso = {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",
@@ -3628,6 +3651,11 @@ def _handle_post_tool_use_inner(data: dict) -> None:
         if ramble_hint:
             advisory_parts.append(ramble_hint)
 
+    # v9.6 — lean_mode silences ALL PostToolUse advisories. Stats
+    # were already accumulated upstream; advisory was input-token
+    # noise only.
+    if config.get("lean_mode", False):
+        advisory_parts = []
     if advisory_parts:
         out = {
             "hookSpecificOutput": {
